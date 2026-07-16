@@ -1,0 +1,26 @@
+name: NSE Breakout Scan
+
+on:
+  schedule:
+    # 4:15 PM IST = 10:45 UTC, Mon-Fri (after NSE market close at 3:30 PM)
+    - cron: "45 10 * * 1-5"
+  workflow_dispatch: {}
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install yfinance pandas
+
+      - name: Run NSE breakout scan
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python nse_breakout_scan.py

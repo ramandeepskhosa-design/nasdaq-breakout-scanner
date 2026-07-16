@@ -1,0 +1,26 @@
+name: NASDAQ Breakout Scan
+
+on:
+  schedule:
+    # 14:16 UTC = 7:46 PM IST, Mon-Fri (runs on GitHub's servers — no laptop/phone needed)
+    - cron: "16 14 * * 1-5"
+  workflow_dispatch: {}   # lets you trigger it manually from the GitHub app/website anytime
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install yfinance pandas
+
+      - name: Run breakout scan
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python breakout_scan.py

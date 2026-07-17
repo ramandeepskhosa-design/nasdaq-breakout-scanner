@@ -2,9 +2,19 @@ name: NASDAQ Breakout Scan
 
 on:
   schedule:
-    # 14:16 UTC = 7:46 PM IST, Mon-Fri (runs on GitHub's servers — no laptop/phone needed)
-    - cron: "16 14 * * 1-5"
-  workflow_dispatch: {}   # lets you trigger it manually from the GitHub app/website anytime
+    # GitHub's own scheduler can lag by 1+ hour on low-traffic repos, so we
+    # fire 5 close-together attempts around 7:46 PM IST. A dedupe guard
+    # (last_nasdaq_scan.txt) ensures only the FIRST one that actually runs
+    # each day sends a message — the rest are silent no-ops.
+    - cron: "16 14 * * 1-5"   # 7:46 PM IST
+    - cron: "24 14 * * 1-5"   # 7:54 PM IST
+    - cron: "32 14 * * 1-5"   # 8:02 PM IST
+    - cron: "40 14 * * 1-5"   # 8:10 PM IST
+    - cron: "48 14 * * 1-5"   # 8:18 PM IST
+  workflow_dispatch: {}   # lets you trigger it manually from the GitHub app/website anytime, always runs
+
+permissions:
+  contents: write
 
 jobs:
   scan:
@@ -17,10 +27,35 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install yfinance pandas
+        run: pip install yfinance pandas lxml
+
+      - name: Check dedupe guard (skip if already sent today)
+        id: guard
+        run: |
+          TODAY=$(date -u +%Y-%m-%d)
+          LAST=$(cat last_nasdaq_scan.txt 2>/dev/null || echo "")
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          elif [ "$TODAY" = "$LAST" ]; then
+            echo "Already sent today ($LAST) — skipping duplicate scheduled run."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Run breakout scan
+        if: steps.guard.outputs.should_run == 'true'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python breakout_scan.py
+
+      - name: Update dedupe guard
+        if: steps.guard.outputs.should_run == 'true' && github.event_name == 'schedule'
+        run: |
+          date -u +%Y-%m-%d > last_nasdaq_scan.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add last_nasdaq_scan.txt
+          git commit -m "Update NASDAQ scan dedupe guard [skip ci]" || true
+          git push || true

@@ -2,9 +2,16 @@ name: NSE Breakout Scan
 
 on:
   schedule:
-    # 4:15 PM IST = 10:45 UTC, Mon-Fri (after NSE market close at 3:30 PM)
-    - cron: "45 10 * * 1-5"
+    # GitHub's own scheduler can lag on low-traffic repos, so we fire a
+    # few close-together attempts after market close. A dedupe guard
+    # (last_nse_scan.txt) ensures only the first one each day actually sends.
+    - cron: "45 10 * * 1-5"   # 4:15 PM IST
+    - cron: "55 10 * * 1-5"   # 4:25 PM IST
+    - cron: "05 11 * * 1-5"   # 4:35 PM IST
   workflow_dispatch: {}
+
+permissions:
+  contents: write
 
 jobs:
   scan:
@@ -19,8 +26,33 @@ jobs:
       - name: Install dependencies
         run: pip install yfinance pandas
 
+      - name: Check dedupe guard (skip if already sent today)
+        id: guard
+        run: |
+          TODAY=$(date -u +%Y-%m-%d)
+          LAST=$(cat last_nse_scan.txt 2>/dev/null || echo "")
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          elif [ "$TODAY" = "$LAST" ]; then
+            echo "Already sent today ($LAST) — skipping duplicate scheduled run."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Run NSE breakout scan
+        if: steps.guard.outputs.should_run == 'true'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python nse_breakout_scan.py
+
+      - name: Update dedupe guard
+        if: steps.guard.outputs.should_run == 'true' && github.event_name == 'schedule'
+        run: |
+          date -u +%Y-%m-%d > last_nse_scan.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add last_nse_scan.txt
+          git commit -m "Update NSE scan dedupe guard [skip ci]" || true
+          git push || true

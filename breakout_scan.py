@@ -1,9 +1,13 @@
 """
-NASDAQ 5-Day Range Breakout Scanner → Telegram
-================================================
-Scans the 292-stock NASDAQ universe (saved from the old dashboard) using
-free Yahoo Finance data. A stock "breaks out" when its most recent daily
-high trades above the highest daily high of the previous 5 trading days.
+NASDAQ + S&P 500 Range Breakout Scanner → Telegram
+====================================================
+Scans a merged NASDAQ + S&P 500 universe (~700 stocks) using free Yahoo
+Finance data. A stock "breaks out" when its most recent daily high trades
+above the highest daily high of the previous 5 trading days, AND it's
+trading above the full EMA 9>20>50>100>200 bullish stack.
+
+Qualifying breakouts are ranked by 20-day momentum (price return over the
+last ~1 month) so the strongest movers show first.
 
 Sends the top breakouts straight to a Telegram bot — no server, no
 laptop needed once scheduled.
@@ -111,6 +115,13 @@ def scan_breakouts(tickers):
 
             day_pct = round((today_close - today_open) / today_open * 100, 2) if today_open > 0 else 0
 
+            # 20-day momentum: price return over ~1 trading month
+            momentum_pct = None
+            if len(closes) >= 21:
+                close_20d_ago = float(closes.iloc[-21])
+                if close_20d_ago > 0:
+                    momentum_pct = round((float(today_close) - close_20d_ago) / close_20d_ago * 100, 2)
+
             breakouts.append({
                 "sym": t,
                 "close": round(float(today_close), 2),
@@ -118,6 +129,7 @@ def scan_breakouts(tickers):
                 "range_high": round(float(range_high), 2),
                 "breakout_pct": breakout_pct,
                 "day_pct": day_pct,
+                "momentum_pct": momentum_pct,
                 "close_above_range": bool(today_close > range_high),
                 "ema_stack_ok": True,
             })
@@ -125,15 +137,16 @@ def scan_breakouts(tickers):
             errors += 1
             continue
 
-    breakouts.sort(key=lambda x: -x["breakout_pct"])
+    # Rank qualifying breakouts by 20-day momentum first (strongest movers on top)
+    breakouts.sort(key=lambda x: -(x["momentum_pct"] if x["momentum_pct"] is not None else -999))
     return breakouts, scanned, errors
 
 
 def format_telegram_message(breakouts, scanned, errors):
     from datetime import datetime
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
-    lines = [f"<b>🚀 NASDAQ 5-Day Breakout Scan</b>", f"{now} · {scanned} scanned",
-              "<i>Filter: close above EMA 9&gt;20&gt;50&gt;100&gt;200 (full bullish stack)</i>"]
+    lines = [f"<b>🚀 NASDAQ + S&amp;P 500 Breakout Scan</b>", f"{now} · {scanned} scanned",
+              "<i>Filter: 5-day range breakout + EMA 9&gt;20&gt;50&gt;100&gt;200 stack · ranked by 20-day momentum</i>"]
     if not breakouts:
         lines.append("\nNo breakouts found today.")
         return "\n".join(lines)
@@ -141,9 +154,10 @@ def format_telegram_message(breakouts, scanned, errors):
     lines.append(f"\n<b>{len(breakouts)} breakout(s) found:</b>\n")
     for i, b in enumerate(breakouts[:20], 1):
         hold = "✅ holding" if b["close_above_range"] else "⚠ wick only"
+        mom  = f' · 🔥 +{b["momentum_pct"]}% (20d)' if b["momentum_pct"] is not None else ""
         lines.append(
             f"{i}. <b>{b['sym']}</b>  ${b['close']}  "
-            f"(+{b['breakout_pct']}% above 5d range)  {hold}"
+            f"(+{b['breakout_pct']}% above 5d range)  {hold}{mom}"
         )
     return "\n".join(lines)
 

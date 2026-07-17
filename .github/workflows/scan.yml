@@ -3,14 +3,14 @@ name: NASDAQ Breakout Scan
 on:
   schedule:
     # GitHub's own scheduler can lag by 1+ hour on low-traffic repos, so we
-    # fire 5 close-together attempts around 7:46 PM IST. A dedupe guard
+    # fire 5 close-together attempts around 7:00 PM IST. A dedupe guard
     # (last_nasdaq_scan.txt) ensures only the FIRST one that actually runs
     # each day sends a message — the rest are silent no-ops.
-    - cron: "16 14 * * 1-5"   # 7:46 PM IST
-    - cron: "24 14 * * 1-5"   # 7:54 PM IST
-    - cron: "32 14 * * 1-5"   # 8:02 PM IST
-    - cron: "40 14 * * 1-5"   # 8:10 PM IST
-    - cron: "48 14 * * 1-5"   # 8:18 PM IST
+    - cron: "30 13 * * 1-5"   # 7:00 PM IST
+    - cron: "38 13 * * 1-5"   # 7:08 PM IST
+    - cron: "46 13 * * 1-5"   # 7:16 PM IST
+    - cron: "54 13 * * 1-5"   # 7:24 PM IST
+    - cron: "02 14 * * 1-5"   # 7:32 PM IST
   workflow_dispatch: {}   # lets you trigger it manually from the GitHub app/website anytime, always runs
 
 permissions:

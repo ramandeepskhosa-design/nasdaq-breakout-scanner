@@ -31,6 +31,7 @@ TELEGRAM_BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 TELEGRAM_CHAT_ID   = os.environ["TELEGRAM_CHAT_ID"]
 
 MIN_BREAKOUT_PCT = 0.3   # ignore noise below this
+MIN_RSI          = 70    # only keep stocks with RSI(14) above this (strong bullish momentum)
 
 
 def load_universe():
@@ -44,6 +45,22 @@ def ema(series, period):
     if len(series) < period:
         return None
     return float(series.ewm(span=period, adjust=False).mean().iloc[-1])
+
+
+def rsi(series, period=14):
+    """Wilder's RSI(14). Returns None if not enough history."""
+    if len(series) < period + 1:
+        return None
+    delta = series.diff()
+    gain = delta.where(delta > 0, 0.0)
+    loss = -delta.where(delta < 0, 0.0)
+    avg_gain = gain.ewm(alpha=1 / period, adjust=False).mean()
+    avg_loss = loss.ewm(alpha=1 / period, adjust=False).mean()
+    last_gain, last_loss = avg_gain.iloc[-1], avg_loss.iloc[-1]
+    if last_loss == 0:
+        return 100.0
+    rs = last_gain / last_loss
+    return float(100 - (100 / (1 + rs)))
 
 
 def fetch_daily_bars(tickers, period="1y"):
@@ -115,7 +132,12 @@ def scan_breakouts(tickers):
 
             day_pct = round((today_close - today_open) / today_open * 100, 2) if today_open > 0 else 0
 
-            # 20-day momentum: price return over ~1 trading month
+            # RSI(14): only keep stocks with strong bullish momentum
+            rsi_14 = rsi(closes, 14)
+            if rsi_14 is None or rsi_14 < MIN_RSI:
+                continue
+
+            # 20-day momentum: price return over ~1 trading month (shown alongside RSI)
             momentum_pct = None
             if len(closes) >= 21:
                 close_20d_ago = float(closes.iloc[-21])
@@ -129,6 +151,7 @@ def scan_breakouts(tickers):
                 "range_high": round(float(range_high), 2),
                 "breakout_pct": breakout_pct,
                 "day_pct": day_pct,
+                "rsi": round(rsi_14, 1),
                 "momentum_pct": momentum_pct,
                 "close_above_range": bool(today_close > range_high),
                 "ema_stack_ok": True,
@@ -137,8 +160,8 @@ def scan_breakouts(tickers):
             errors += 1
             continue
 
-    # Rank qualifying breakouts by 20-day momentum first (strongest movers on top)
-    breakouts.sort(key=lambda x: -(x["momentum_pct"] if x["momentum_pct"] is not None else -999))
+    # Rank qualifying breakouts by RSI(14) — strongest momentum on top
+    breakouts.sort(key=lambda x: -x["rsi"])
     return breakouts, scanned, errors
 
 
@@ -146,7 +169,7 @@ def format_telegram_message(breakouts, scanned, errors):
     from datetime import datetime
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     lines = [f"<b>🚀 NASDAQ + S&amp;P 500 Breakout Scan</b>", f"{now} · {scanned} scanned",
-              "<i>Filter: 5-day range breakout + EMA 9&gt;20&gt;50&gt;100&gt;200 stack · ranked by 20-day momentum</i>"]
+              f"<i>Filter: 5-day range breakout + EMA 9&gt;20&gt;50&gt;100&gt;200 stack + RSI(14) &gt; {MIN_RSI} · ranked by RSI</i>"]
     if not breakouts:
         lines.append("\nNo breakouts found today.")
         return "\n".join(lines)
@@ -154,10 +177,10 @@ def format_telegram_message(breakouts, scanned, errors):
     lines.append(f"\n<b>{len(breakouts)} breakout(s) found:</b>\n")
     for i, b in enumerate(breakouts[:20], 1):
         hold = "✅ holding" if b["close_above_range"] else "⚠ wick only"
-        mom  = f' · 🔥 +{b["momentum_pct"]}% (20d)' if b["momentum_pct"] is not None else ""
+        mom  = f' · 20d {b["momentum_pct"]:+}%' if b["momentum_pct"] is not None else ""
         lines.append(
             f"{i}. <b>{b['sym']}</b>  ${b['close']}  "
-            f"(+{b['breakout_pct']}% above 5d range)  {hold}{mom}"
+            f"(+{b['breakout_pct']}% above 5d range)  {hold}  🔥 RSI {b['rsi']}{mom}"
         )
     return "\n".join(lines)
 

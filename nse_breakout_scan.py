@@ -126,6 +126,93 @@ def scan_breakouts(tickers, apply_ema_filter=False):
     return breakouts, scanned, errors
 
 
+MAX_LOWER_WICK_PCT = 5.0   # candle low must be within 5% of range from the body's low edge
+
+
+def scan_no_wick_gap(tickers):
+    """Gap-up + no-lower-wick scanner.
+    A stock qualifies when today opened ABOVE yesterday's close (gap up,
+    any size) AND the candle never traded below its own open (near-zero
+    lower wick) — a sign buyers held control the entire session, which
+    tends to carry momentum into the next 2-3 days.
+    Sorted by gap % descending (biggest gap-up-and-held first).
+    """
+    data = fetch_daily_bars(tickers, period="5d")
+    results = []
+    scanned, errors = 0, 0
+
+    for t, df in data.items():
+        try:
+            if len(df) < 2:
+                continue
+            today      = df.iloc[-1]
+            prev_close = float(df.iloc[-2]["Close"])
+            o, h, l, c = (float(today["Open"]), float(today["High"]),
+                          float(today["Low"]), float(today["Close"]))
+            if any(pd.isna(x) for x in (o, h, l, c, prev_close)):
+                continue
+            if prev_close <= 0 or o <= 0:
+                continue
+
+            scanned += 1
+
+            gap_pct = (o - prev_close) / prev_close * 100
+            if gap_pct <= 0:
+                continue   # not a gap up
+
+            rng = h - l
+            if rng <= 0:
+                continue
+            # Sanity-check the candle: reject corrupted OHLC data (e.g. a
+            # bad row where open/low don't make sense relative to high/low)
+            if not (l <= o <= h and l <= c <= h):
+                continue
+            # Measured against the OPEN, not the candle body — a stock that
+            # gapped up then faded to close red should NOT qualify, since
+            # that's giving back the gap, not holding it.
+            lower_wick_pct = (o - l) / rng * 100
+            if lower_wick_pct < 0 or lower_wick_pct > MAX_LOWER_WICK_PCT or c < o:
+                continue   # dipped below open, or closed red — doesn't qualify
+
+            day_pct = (c - o) / o * 100 if o > 0 else 0
+
+            results.append({
+                "sym":            t,
+                "close":          round(c, 2),
+                "open":           round(o, 2),
+                "gap_pct":        round(gap_pct, 2),
+                "day_pct":        round(day_pct, 2),
+                "lower_wick_pct": round(lower_wick_pct, 1),
+                "green":          bool(c > o),
+            })
+        except Exception:
+            errors += 1
+            continue
+
+    results.sort(key=lambda x: -x["gap_pct"])
+    return results, scanned, errors
+
+
+def format_no_wick_message(index_key, results, scanned):
+    from datetime import datetime
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    name = INDEX_NAMES[index_key]
+    lines = [f"<b>🎯 {name} — Gap-Up, No Lower Wick</b>", f"{now} · {scanned} scanned",
+             "<i>Gapped up + held above open all session (no dip below open) — tends to carry momentum 2-3 days</i>"]
+    if not results:
+        lines.append("\nNo qualifying stocks found.")
+        return "\n".join(lines)
+
+    lines.append(f"\n<b>{len(results)} found, sorted by gap % (highest first):</b>\n")
+    for i, r in enumerate(results[:20], 1):
+        body = "🟢" if r["green"] else "🔴"
+        lines.append(
+            f"{i}. <b>{r['sym']}</b>  ₹{r['close']}  "
+            f"gap +{r['gap_pct']}%  {body} day {r['day_pct']:+.2f}%  wick {r['lower_wick_pct']}%"
+        )
+    return "\n".join(lines)
+
+
 def format_message(index_key, breakouts, scanned, ema_filtered):
     from datetime import datetime
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -174,5 +261,23 @@ def main():
         time.sleep(1)   # avoid Telegram rate limit between messages
 
 
+def main_no_wick():
+    indices = load_indices()
+    for key in ["nifty50", "nifty_next50", "midcap50", "smallcap250"]:
+        tickers = indices[key]
+        print(f"\nScanning {INDEX_NAMES[key]} ({len(tickers)} stocks) for gap-up/no-lower-wick...")
+        results, scanned, errors = scan_no_wick_gap(tickers)
+        print(f"  Scanned: {scanned}  Errors: {errors}  Found: {len(results)}")
+
+        msg = format_no_wick_message(key, results, scanned)
+        result = send_telegram(msg)
+        print(f"  Telegram send result: {result.get('ok')}")
+        time.sleep(1)
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "no_wick":
+        main_no_wick()
+    else:
+        main()

@@ -1,0 +1,33 @@
+name: Gap-Up No-Lower-Wick Scan
+
+on:
+  schedule:
+    # Evening IST: NSE using today's just-closed candle, NASDAQ+S&P 500
+    # using the most recently completed US session. ~4:15 PM IST.
+    - cron: "45 10 * * 1-5"
+  workflow_dispatch: {}
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install yfinance pandas
+
+      - name: Run NSE gap-up/no-wick scan
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python nse_breakout_scan.py no_wick
+
+      - name: Run NASDAQ + S&P 500 gap-up/no-wick scan
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python breakout_scan.py no_wick

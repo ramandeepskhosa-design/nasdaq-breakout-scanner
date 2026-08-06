@@ -5,7 +5,8 @@ Runs every 5 minutes (see .github/workflows/listen.yml). Each run:
   1. Checks Telegram for any new messages since the last check.
   2. "scan" / "run" / "results" / "update"      -> NASDAQ breakout scan
      "nifty" / "nse" / "india"                  -> NSE breakout scan (4 indices)
-     "all"                                       -> both
+     "wick" / "nowick" / "gap"                  -> gap-up/no-lower-wick scan (both NSE + NASDAQ)
+     "all"                                       -> everything
   3. Remembers which messages it already saw (offset.txt) so it never
      double-replies, and commits that file back to the repo.
 
@@ -31,6 +32,7 @@ OFFSET_FILE = os.path.join(BASE_DIR, "offset.txt")
 
 NASDAQ_WORDS = {"scan", "run", "/scan", "/run", "results", "update"}
 NSE_WORDS    = {"nifty", "nse", "india", "/nifty", "/nse"}
+WICK_WORDS   = {"wick", "nowick", "gap", "/wick", "/gap"}
 ALL_WORDS    = {"all", "/all"}
 
 
@@ -75,6 +77,26 @@ def run_nse_scan():
         time.sleep(1)
 
 
+def run_wick_scan():
+    print("Running on-demand gap-up/no-lower-wick scan (NSE)...")
+    indices = nse.load_indices()
+    for key in ["nifty50", "nifty_next50", "midcap50", "smallcap250"]:
+        tickers = indices[key]
+        results, scanned, errors = nse.scan_no_wick_gap(tickers)
+        msg = "<b>📲 On-demand scan</b>\n" + nse.format_no_wick_message(key, results, scanned)
+        result = nse.send_telegram(msg)
+        print(f"  {key}: Telegram send result:", result.get("ok"))
+        time.sleep(1)
+
+    print("Running on-demand gap-up/no-lower-wick scan (NASDAQ + S&P 500)...")
+    tickers = load_universe()
+    from breakout_scan import scan_no_wick_gap, format_no_wick_message
+    results, scanned, errors = scan_no_wick_gap(tickers)
+    msg = "<b>📲 On-demand scan</b>\n" + format_no_wick_message(results, scanned)
+    result = send_telegram(msg)
+    print("  NASDAQ+S&P: Telegram send result:", result.get("ok"))
+
+
 def main():
     offset = get_offset()
     print(f"Checking Telegram for messages after update_id {offset}...")
@@ -87,7 +109,7 @@ def main():
         return
 
     max_update_id = offset
-    want_nasdaq, want_nse = False, False
+    want_nasdaq, want_nse, want_wick = False, False, False
 
     for u in updates:
         max_update_id = max(max_update_id, u["update_id"])
@@ -102,13 +124,16 @@ def main():
         elif text in NSE_WORDS:
             want_nse = True
             print(f"  NSE trigger matched: '{text}'")
+        elif text in WICK_WORDS:
+            want_wick = True
+            print(f"  WICK trigger matched: '{text}'")
         elif text in ALL_WORDS:
-            want_nasdaq = want_nse = True
+            want_nasdaq = want_nse = want_wick = True
             print(f"  ALL trigger matched: '{text}'")
 
     save_offset(max_update_id)
 
-    if not (want_nasdaq or want_nse):
+    if not (want_nasdaq or want_nse or want_wick):
         print("No trigger word found in new messages — nothing to do.")
         return
 
@@ -116,6 +141,8 @@ def main():
         run_nasdaq_scan()
     if want_nse:
         run_nse_scan()
+    if want_wick:
+        run_wick_scan()
 
 
 if __name__ == "__main__":

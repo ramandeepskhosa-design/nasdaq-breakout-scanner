@@ -44,14 +44,14 @@ def ema(series, period):
     return float(series.ewm(span=period, adjust=False).mean().iloc[-1])
 
 
-def fetch_daily_bars(tickers, period="1y"):
+def fetch_daily_bars(tickers, period="1y", interval="1d"):
     all_data = {}
     chunk_size = 50
     for i in range(0, len(tickers), chunk_size):
         chunk = [f"{t}.NS" for t in tickers[i:i + chunk_size]]
         try:
             df = yf.download(
-                chunk, period=period, interval="1d",
+                chunk, period=period, interval=interval,
                 group_by="ticker", threads=True, progress=False,
                 auto_adjust=False,
             )
@@ -193,6 +193,86 @@ def scan_no_wick_gap(tickers):
     return results, scanned, errors
 
 
+def scan_opening_wick(tickers):
+    """Opening-candle gap-up + no-lower-wick scanner.
+    Uses just the FIRST 15-min candle of today (9:15-9:30 AM IST) so the
+    signal is available right after market open, not at end of day.
+    Same idea as scan_no_wick_gap, but checkable within minutes of the open.
+    """
+    data = fetch_daily_bars(tickers, period="5d", interval="15m")
+    results = []
+    scanned, errors = 0, 0
+
+    for t, df in data.items():
+        try:
+            if df.index.tz is not None:
+                df = df.tz_convert("Asia/Kolkata")
+            today_date = df.index[-1].date()
+            today_bars = df[df.index.date == today_date]
+            prior_bars = df[df.index.date < today_date]
+            if today_bars.empty or prior_bars.empty:
+                continue
+
+            first_bar  = today_bars.iloc[0]
+            prev_close = float(prior_bars.iloc[-1]["Close"])
+            o, h, l, c = (float(first_bar["Open"]), float(first_bar["High"]),
+                          float(first_bar["Low"]), float(first_bar["Close"]))
+            if any(pd.isna(x) for x in (o, h, l, c, prev_close)):
+                continue
+            if prev_close <= 0 or o <= 0:
+                continue
+
+            scanned += 1
+
+            gap_pct = (o - prev_close) / prev_close * 100
+            if gap_pct <= 0:
+                continue
+
+            rng = h - l
+            if rng <= 0:
+                continue
+            if not (l <= o <= h and l <= c <= h):
+                continue
+            lower_wick_pct = (o - l) / rng * 100
+            if lower_wick_pct < 0 or lower_wick_pct > MAX_LOWER_WICK_PCT or c < o:
+                continue
+
+            candle_pct = (c - o) / o * 100 if o > 0 else 0
+
+            results.append({
+                "sym":            t,
+                "close":          round(c, 2),
+                "gap_pct":        round(gap_pct, 2),
+                "candle_pct":     round(candle_pct, 2),
+                "lower_wick_pct": round(lower_wick_pct, 1),
+            })
+        except Exception:
+            errors += 1
+            continue
+
+    results.sort(key=lambda x: -x["gap_pct"])
+    return results, scanned, errors
+
+
+def format_opening_wick_message(index_key, results, scanned):
+    from datetime import datetime
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    name = INDEX_NAMES[index_key]
+    lines = [f"<b>🌅 {name} — Opening Gap-Up, No Lower Wick</b>", f"{now} · {scanned} scanned",
+             "<i>First 15-min candle (9:15-9:30 AM) gapped up and never dipped below open</i>"]
+    if not results:
+        lines.append("\nNo qualifying stocks found.")
+        return "\n".join(lines)
+
+    lines.append(f"\n<b>{len(results)} found, sorted by gap % (highest first):</b>\n")
+    for i, r in enumerate(results[:20], 1):
+        lines.append(
+            f"{i}. <b>{r['sym']}</b>  ₹{r['close']}  "
+            f"gap +{r['gap_pct']}%  15m {r['candle_pct']:+.2f}%  wick {r['lower_wick_pct']}%"
+        )
+    return "\n".join(lines)
+
+
 def format_no_wick_message(index_key, results, scanned):
     from datetime import datetime
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
@@ -275,9 +355,25 @@ def main_no_wick():
         time.sleep(1)
 
 
+def main_open_wick():
+    indices = load_indices()
+    for key in ["nifty50", "nifty_next50", "midcap50", "smallcap250"]:
+        tickers = indices[key]
+        print(f"\nScanning {INDEX_NAMES[key]} ({len(tickers)} stocks) opening candle gap-up/no-wick...")
+        results, scanned, errors = scan_opening_wick(tickers)
+        print(f"  Scanned: {scanned}  Errors: {errors}  Found: {len(results)}")
+
+        msg = format_opening_wick_message(key, results, scanned)
+        result = send_telegram(msg)
+        print(f"  Telegram send result: {result.get('ok')}")
+        time.sleep(1)
+
+
 if __name__ == "__main__":
     import sys
     if len(sys.argv) > 1 and sys.argv[1] == "no_wick":
         main_no_wick()
+    elif len(sys.argv) > 1 and sys.argv[1] == "open_wick":
+        main_open_wick()
     else:
         main()

@@ -378,6 +378,118 @@ def main():
         print(result)
 
 
+MIN_ABOVE_EMA20_PCT = 85    # % of today's 15m bars that must hold above EMA20
+MAX_EMA20_DIST_PCT  = 5.0   # max allowed distance from EMA20 (tightness)
+MAX_DAY_MOVE_PCT    = 3.0   # max abs day open->close move (flat consolidation)
+MIN_BARS_TODAY      = 8     # need a few hours of bars before judging the day
+
+
+def scan_ema20_hold(tickers):
+    """EMA20 hold / tight consolidation scanner (15-min chart).
+    Looks for stocks that: broke out above the prior 1-2 day range, then
+    spent today consolidating tightly ABOVE a rising 20 EMA (not drifting
+    far from it) instead of pulling back hard. This pattern often precedes
+    the next leg up.
+    """
+    data = fetch_daily_bars(tickers, period="10d", interval="15m")
+    results = []
+    scanned, errors = 0, 0
+
+    for t, df in data.items():
+        try:
+            if df.index.tz is not None:
+                df = df.tz_convert("America/New_York")
+            df = df.dropna(subset=["Close", "High", "Low", "Open"])
+            if len(df) < 40:
+                continue
+
+            df["ema20"] = df["Close"].ewm(span=20, adjust=False).mean()
+
+            today_date = df.index[-1].date()
+            today_bars = df[df.index.date == today_date]
+            prior_bars = df[df.index.date < today_date]
+            if len(today_bars) < MIN_BARS_TODAY or prior_bars.empty:
+                continue
+
+            scanned += 1
+
+            above_frac = (today_bars["Low"] >= today_bars["ema20"]).mean() * 100
+            if above_frac < MIN_ABOVE_EMA20_PCT:
+                continue
+
+            dist_pct = (today_bars["Close"] - today_bars["ema20"]) / today_bars["ema20"] * 100
+            max_dist = float(dist_pct.max())
+            avg_dist = float(dist_pct.mean())
+            if max_dist > MAX_EMA20_DIST_PCT:
+                continue
+
+            prior_dates = sorted(set(prior_bars.index.date))[-2:]
+            prior_mask  = pd.Series(prior_bars.index.date, index=prior_bars.index).isin(prior_dates)
+            prior_high  = prior_bars.loc[prior_mask, "High"].max()
+            today_low_all = float(today_bars["Low"].min())
+            if pd.isna(prior_high) or today_low_all < float(prior_high):
+                continue
+
+            day_open  = float(today_bars.iloc[0]["Open"])
+            day_close = float(today_bars.iloc[-1]["Close"])
+            if day_open <= 0:
+                continue
+            day_pct = (day_close - day_open) / day_open * 100
+            if abs(day_pct) > MAX_DAY_MOVE_PCT:
+                continue
+
+            results.append({
+                "sym":          t,
+                "close":        round(day_close, 2),
+                "ema20":        round(float(today_bars["ema20"].iloc[-1]), 2),
+                "avg_dist_pct": round(avg_dist, 2),
+                "max_dist_pct": round(max_dist, 2),
+                "day_pct":      round(day_pct, 2),
+                "above_frac":   round(above_frac, 1),
+                "prior_high":   round(float(prior_high), 2),
+            })
+        except Exception:
+            errors += 1
+            continue
+
+    results.sort(key=lambda x: x["avg_dist_pct"])
+    return results, scanned, errors
+
+
+def format_ema20_hold_message(results, scanned):
+    from datetime import datetime
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    lines = [f"<b>📐 NASDAQ + S&amp;P 500 — EMA20 Hold / Tight Consolidation</b>", f"{now} · {scanned} scanned",
+             "<i>Above prior 1-2 day range, holding tight above rising 20 EMA (15m), flat day</i>"]
+    if not results:
+        lines.append("\nNo qualifying stocks found.")
+        return "\n".join(lines)
+
+    lines.append(f"\n<b>{len(results)} found, tightest first:</b>\n")
+    for i, r in enumerate(results[:25], 1):
+        lines.append(
+            f"{i}. <b>{r['sym']}</b>  ${r['close']}  "
+            f"EMA20 ${r['ema20']}  dist {r['avg_dist_pct']}%  day {r['day_pct']:+.2f}%"
+        )
+    return "\n".join(lines)
+
+
+def main_ema20_hold():
+    print("Loading universe...")
+    tickers = load_universe()
+    print(f"Scanning {len(tickers)} stocks for EMA20 hold consolidation...")
+
+    results, scanned, errors = scan_ema20_hold(tickers)
+    print(f"Scanned: {scanned}  Errors: {errors}  Found: {len(results)}")
+
+    msg = format_ema20_hold_message(results, scanned)
+    print("\n--- Telegram message ---")
+    print(msg)
+
+    result = send_telegram(msg)
+    print("\nTelegram send result:", result.get("ok"))
+
+
 def main_no_wick():
     print("Loading universe...")
     tickers = load_universe()
@@ -415,5 +527,7 @@ if __name__ == "__main__":
         main_no_wick()
     elif len(sys.argv) > 1 and sys.argv[1] == "open_wick":
         main_open_wick()
+    elif len(sys.argv) > 1 and sys.argv[1] == "ema20_hold":
+        main_ema20_hold()
     else:
         main()

@@ -1,0 +1,34 @@
+name: EMA20 Hold Consolidation Scan
+
+on:
+  schedule:
+    - cron: "30 8 * * 1-5"    # 2:00 PM IST — NSE
+    - cron: "30 15 * * 1-5"   # 9:00 PM IST — NASDAQ + S&P 500
+  workflow_dispatch: {}   # manual trigger always runs both
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install yfinance pandas
+
+      - name: NSE EMA20 hold scan
+        if: github.event.schedule == '30 8 * * 1-5' || github.event_name == 'workflow_dispatch'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python nse_breakout_scan.py ema20_hold
+
+      - name: NASDAQ + S&P 500 EMA20 hold scan
+        if: github.event.schedule == '30 15 * * 1-5' || github.event_name == 'workflow_dispatch'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python breakout_scan.py ema20_hold

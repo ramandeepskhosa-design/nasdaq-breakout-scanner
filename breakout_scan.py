@@ -378,6 +378,114 @@ def main():
         print(result)
 
 
+def scan_smooth_parallel_ema(tickers):
+    """Smooth/Parallel EMA5-EMA9 scanner (15-min chart, previous complete day).
+    Looks for stocks where the prior trading day's EMA5 and EMA9 moved
+    smoothly, in the same direction, without crossing and without the gap
+    between them wobbling much — a "quiet coil" that often precedes a
+    bigger move the next day.
+    """
+    data = fetch_daily_bars(tickers, period="10d", interval="15m")
+    results, scanned, errors = [], 0, 0
+
+    for t, df in data.items():
+        try:
+            if df.index.tz is not None:
+                df = df.tz_convert("America/New_York")
+            df = df.dropna(subset=["Close"])
+            if len(df) < 60:
+                continue
+            df["ema5"] = df["Close"].ewm(span=5, adjust=False).mean()
+            df["ema9"] = df["Close"].ewm(span=9, adjust=False).mean()
+
+            all_dates = sorted(set(df.index.date))
+            target_date = None
+            for d in reversed(all_dates):
+                day_bars = df[df.index.date == d]
+                if len(day_bars) >= 20:
+                    target_date = d
+                    break
+            if target_date is None:
+                continue
+            day_bars = df[df.index.date == target_date]
+            scanned += 1
+
+            e5, e9 = day_bars["ema5"], day_bars["ema9"]
+            spread = e5 - e9
+            if not ((spread > 0).all() or (spread < 0).all()):
+                continue
+
+            trend5 = float(e5.iloc[-1] - e5.iloc[0])
+            trend9 = float(e9.iloc[-1] - e9.iloc[0])
+            if trend5 == 0 or (trend5 > 0) != (trend9 > 0):
+                continue
+
+            avg_price = float(day_bars["Close"].mean())
+            if avg_price <= 0:
+                continue
+            spread_std_pct = float(spread.std() / avg_price * 100)
+
+            e5_diffs = e5.diff().dropna()
+            if len(e5_diffs) < 5 or e5_diffs.abs().mean() == 0:
+                continue
+            smoothness_cv = float(e5_diffs.std() / e5_diffs.abs().mean())
+
+            day_open  = float(day_bars.iloc[0]["Open"])
+            day_close = float(day_bars.iloc[-1]["Close"])
+            day_pct = (day_close - day_open) / day_open * 100 if day_open > 0 else 0
+
+            results.append({
+                "sym":            t,
+                "close":          round(day_close, 2),
+                "trend":          "up" if trend5 > 0 else "down",
+                "spread_std_pct": round(spread_std_pct, 3),
+                "smoothness_cv":  round(smoothness_cv, 2),
+                "day_pct":        round(day_pct, 2),
+                "date":           str(target_date),
+            })
+        except Exception:
+            errors += 1
+            continue
+
+    results.sort(key=lambda x: x["spread_std_pct"] + x["smoothness_cv"] * 0.1)
+    return results, scanned, errors
+
+
+def format_smooth_parallel_ema_message(results, scanned):
+    from datetime import datetime
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    lines = [f"<b>〰️ NASDAQ + S&amp;P 500 — Smooth/Parallel EMA5-EMA9 (prev day)</b>", f"{now} · {scanned} scanned",
+             "<i>Yesterday's EMA5 &amp; EMA9 moved smoothly, same direction, no crossover — often precedes a bigger move today</i>"]
+    if not results:
+        lines.append("\nNo qualifying stocks found.")
+        return "\n".join(lines)
+
+    lines.append(f"\n<b>{len(results)} found, tightest &amp; smoothest first:</b>\n")
+    for i, r in enumerate(results[:25], 1):
+        arrow = "🔼" if r["trend"] == "up" else "🔽"
+        lines.append(
+            f"{i}. <b>{r['sym']}</b>  ${r['close']}  {arrow}  "
+            f"tight {r['spread_std_pct']}%  smooth {r['smoothness_cv']}  (yday {r['day_pct']:+.2f}%)"
+        )
+    return "\n".join(lines)
+
+
+def main_smooth_ema():
+    print("Loading universe...")
+    tickers = load_universe()
+    print(f"Scanning {len(tickers)} stocks for smooth/parallel EMA5-EMA9...")
+
+    results, scanned, errors = scan_smooth_parallel_ema(tickers)
+    print(f"Scanned: {scanned}  Errors: {errors}  Found: {len(results)}")
+
+    msg = format_smooth_parallel_ema_message(results, scanned)
+    print("\n--- Telegram message ---")
+    print(msg)
+
+    result = send_telegram(msg)
+    print("\nTelegram send result:", result.get("ok"))
+
+
 MIN_ABOVE_EMA20_PCT = 85    # % of today's 15m bars that must hold above EMA20
 MAX_EMA20_DIST_PCT  = 5.0   # max allowed distance from EMA20 (tightness)
 MAX_DAY_MOVE_PCT    = 3.0   # max abs day open->close move (flat consolidation)
@@ -529,5 +637,7 @@ if __name__ == "__main__":
         main_open_wick()
     elif len(sys.argv) > 1 and sys.argv[1] == "ema20_hold":
         main_ema20_hold()
+    elif len(sys.argv) > 1 and sys.argv[1] == "smooth_ema":
+        main_smooth_ema()
     else:
         main()

@@ -1,9 +1,15 @@
-name: NASDAQ Breakout Scan
+name: Signal Scan (RSI + EMA Stack)
 
 on:
-  # Auto-schedule disabled — superseded by the single simplified "signal"
-  # scan (RSI>=60 + EMA stack). Still runnable manually any time.
-  workflow_dispatch: {}
+  schedule:
+    # One single daily run, 7:00 PM IST. By then NSE has fully closed (3:30
+    # PM IST) so its data is settled, and NASDAQ's last session close is
+    # available ahead of tonight's open. Backup attempts guard against
+    # GitHub's scheduler lag; a dedupe file ensures only one send per day.
+    - cron: "30 13 * * 1-5"   # 7:00 PM IST
+    - cron: "45 13 * * 1-5"   # 7:15 PM IST
+    - cron: "00 14 * * 1-5"   # 7:30 PM IST
+  workflow_dispatch: {}   # manual trigger always runs, ignoring dedupe
 
 permissions:
   contents: write
@@ -19,13 +25,13 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install yfinance pandas lxml
+        run: pip install yfinance pandas
 
       - name: Check dedupe guard (skip if already sent today)
         id: guard
         run: |
           TODAY=$(date -u +%Y-%m-%d)
-          LAST=$(cat last_nasdaq_scan.txt 2>/dev/null || echo "")
+          LAST=$(cat last_signal_scan.txt 2>/dev/null || echo "")
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"
           elif [ "$TODAY" = "$LAST" ]; then
@@ -35,19 +41,26 @@ jobs:
             echo "should_run=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Run breakout scan
+      - name: NSE signal scan
         if: steps.guard.outputs.should_run == 'true'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python breakout_scan.py
+        run: python nse_breakout_scan.py signal
+
+      - name: NASDAQ + S&P 500 signal scan
+        if: steps.guard.outputs.should_run == 'true'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python breakout_scan.py signal
 
       - name: Update dedupe guard
         if: steps.guard.outputs.should_run == 'true' && github.event_name == 'schedule'
         run: |
-          date -u +%Y-%m-%d > last_nasdaq_scan.txt
+          date -u +%Y-%m-%d > last_signal_scan.txt
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add last_nasdaq_scan.txt
-          git commit -m "Update NASDAQ scan dedupe guard [skip ci]" || true
+          git add last_signal_scan.txt
+          git commit -m "Update signal scan dedupe guard [skip ci]" || true
           git push || true

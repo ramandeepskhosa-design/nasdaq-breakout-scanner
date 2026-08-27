@@ -1,15 +1,8 @@
 name: NSE Breakout Scan
 
 on:
-  schedule:
-    # Fires every 15 min for the first hour after market open (9:15-10:15
-    # AM IST) so you catch fresh intraday breakouts as they form. These
-    # are genuine separate scans, not deduped — you'll get up to 5 messages.
-    - cron: "45 3 * * 1-5"    # 9:15 AM IST
-    - cron: "0 4 * * 1-5"     # 9:30 AM IST
-    - cron: "15 4 * * 1-5"    # 9:45 AM IST
-    - cron: "30 4 * * 1-5"    # 10:00 AM IST
-    - cron: "45 4 * * 1-5"    # 10:15 AM IST
+  # Auto-schedule disabled — superseded by the single simplified "signal"
+  # scan (RSI>=60 + EMA stack). Still runnable manually any time.
   workflow_dispatch: {}
 
 jobs:

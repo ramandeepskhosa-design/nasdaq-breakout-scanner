@@ -1,10 +1,9 @@
 name: EMA20 Hold Consolidation Scan
 
 on:
-  schedule:
-    - cron: "30 8 * * 1-5"    # 2:00 PM IST — NSE
-    - cron: "30 15 * * 1-5"   # 9:00 PM IST — NASDAQ + S&P 500
-  workflow_dispatch: {}   # manual trigger always runs both
+  # Auto-schedule disabled — superseded by the single simplified "signal"
+  # scan (RSI>=60 + EMA stack). Still runnable manually any time.
+  workflow_dispatch: {}
 
 jobs:
   scan:

@@ -486,6 +486,74 @@ def main_smooth_ema():
     print("\nTelegram send result:", result.get("ok"))
 
 
+SIGNAL_MIN_RSI = 60   # simplified single-signal scan threshold
+
+
+def scan_signal(tickers):
+    """Simplified single-signal scan (daily chart).
+    Only two conditions: RSI(14) >= 60, AND price above the full bullish
+    EMA stack (9 > 20 > 50 > 100 > 200). Nothing else. Ranked by RSI.
+    """
+    data = fetch_daily_bars(tickers, period="1y", interval="1d")
+    results, scanned, errors = [], 0, 0
+
+    for t, df in data.items():
+        try:
+            df = df.dropna(subset=["Close"])
+            if len(df) < 205:
+                continue
+            closes = df["Close"]
+            ltp = float(closes.iloc[-1])
+
+            scanned += 1
+
+            e9, e20, e50, e100, e200 = (ema(closes, p) for p in (9, 20, 50, 100, 200))
+            if None in (e9, e20, e50, e100, e200):
+                continue
+            if not (ltp > e9 > e20 > e50 > e100 > e200):
+                continue
+
+            rsi_14 = rsi(closes, 14)
+            if rsi_14 is None or rsi_14 < SIGNAL_MIN_RSI:
+                continue
+
+            results.append({"sym": t, "close": round(ltp, 2), "rsi": round(rsi_14, 1)})
+        except Exception:
+            errors += 1
+            continue
+
+    results.sort(key=lambda x: -x["rsi"])
+    return results, scanned, errors
+
+
+def format_signal_message(results, scanned):
+    from datetime import datetime
+    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    lines = [f"<b>✅ NASDAQ + S&amp;P 500 — Signal (RSI&gt;={SIGNAL_MIN_RSI} + EMA stack)</b>",
+             f"{now} · {scanned} scanned",
+             "<i>Price above EMA 9&gt;20&gt;50&gt;100&gt;200, ranked by RSI</i>"]
+    if not results:
+        lines.append("\nNo qualifying stocks found.")
+        return "\n".join(lines)
+    lines.append(f"\n<b>{len(results)} found:</b>\n")
+    for i, r in enumerate(results[:25], 1):
+        lines.append(f"{i}. <b>{r['sym']}</b>  ${r['close']}  RSI {r['rsi']}")
+    return "\n".join(lines)
+
+
+def main_signal():
+    print("Loading universe...")
+    tickers = load_universe()
+    print(f"Scanning {len(tickers)} stocks for signal (RSI+EMA stack)...")
+    results, scanned, errors = scan_signal(tickers)
+    print(f"Scanned: {scanned}  Errors: {errors}  Found: {len(results)}")
+    msg = format_signal_message(results, scanned)
+    print("\n--- Telegram message ---")
+    print(msg)
+    result = send_telegram(msg)
+    print("\nTelegram send result:", result.get("ok"))
+
+
 MIN_ABOVE_EMA20_PCT = 85    # % of today's 15m bars that must hold above EMA20
 MAX_EMA20_DIST_PCT  = 5.0   # max allowed distance from EMA20 (tightness)
 MAX_DAY_MOVE_PCT    = 3.0   # max abs day open->close move (flat consolidation)
@@ -639,5 +707,7 @@ if __name__ == "__main__":
         main_ema20_hold()
     elif len(sys.argv) > 1 and sys.argv[1] == "smooth_ema":
         main_smooth_ema()
+    elif len(sys.argv) > 1 and sys.argv[1] == "signal":
+        main_signal()
     else:
         main()

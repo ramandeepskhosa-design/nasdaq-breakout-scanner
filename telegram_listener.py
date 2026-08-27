@@ -60,22 +60,22 @@ def get_updates(offset):
 
 
 def run_nasdaq_scan():
-    print("Running on-demand NASDAQ breakout scan...")
+    print("Running on-demand NASDAQ signal scan (RSI+EMA stack)...")
     tickers = load_universe()
-    breakouts, scanned, errors = scan_breakouts(tickers)
-    msg = "<b>📲 On-demand NASDAQ scan</b>\n" + format_telegram_message(breakouts, scanned, errors)
+    from breakout_scan import scan_signal, format_signal_message
+    results, scanned, errors = scan_signal(tickers)
+    msg = "<b>📲 On-demand scan</b>\n" + format_signal_message(results, scanned)
     result = send_telegram(msg)
     print("  Telegram send result:", result.get("ok"))
 
 
 def run_nse_scan():
-    print("Running on-demand NSE breakout scan...")
+    print("Running on-demand NSE signal scan (RSI+EMA stack)...")
     indices = nse.load_indices()
     for key in ["nifty50", "nifty_next50", "midcap50", "smallcap250"]:
         tickers = indices[key]
-        apply_ema = (key == "smallcap250")
-        breakouts, scanned, errors = nse.scan_breakouts(tickers, apply_ema_filter=apply_ema)
-        msg = "<b>📲 On-demand scan</b>\n" + nse.format_message(key, breakouts, scanned, apply_ema)
+        results, scanned, errors = nse.scan_signal(tickers)
+        msg = "<b>📲 On-demand scan</b>\n" + nse.format_signal_message(key, results, scanned)
         result = nse.send_telegram(msg)
         print(f"  {key}: Telegram send result:", result.get("ok"))
         time.sleep(1)

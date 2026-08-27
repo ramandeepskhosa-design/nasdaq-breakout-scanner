@@ -1,14 +1,9 @@
 name: Opening Gap-Up No-Lower-Wick Scan
 
 on:
-  schedule:
-    # NSE: first 15-min candle (9:15-9:30 AM IST) completes at 9:30 — scan
-    # at 9:35 AM IST for a safe data-availability buffer.
-    - cron: "05 4 * * 1-5"    # 9:35 AM IST
-    # NASDAQ+S&P 500: US market opens 9:30 AM ET (~7:00 PM IST during EDT),
-    # first 15-min candle completes 9:45 ET — scan at 7:20 PM IST.
-    - cron: "50 13 * * 1-5"   # 7:20 PM IST
-  workflow_dispatch: {}   # manual trigger always runs both
+  # Auto-schedule disabled — superseded by the single simplified "signal"
+  # scan (RSI>=60 + EMA stack). Still runnable manually any time.
+  workflow_dispatch: {}
 
 jobs:
   scan:

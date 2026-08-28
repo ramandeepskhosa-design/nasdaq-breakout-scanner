@@ -470,19 +470,21 @@ SIGNAL_MIN_RSI = 60   # simplified single-signal scan threshold
 
 def scan_signal(tickers):
     """Simplified single-signal scan (daily chart).
-    Only two conditions: RSI(14) >= 60, AND price above the full bullish
-    EMA stack (9 > 20 > 50 > 100 > 200). Nothing else. Ranked by RSI.
+    Three conditions: RSI(14) >= 60, price above the full bullish EMA
+    stack (9 > 20 > 50 > 100 > 200), AND today's high above the highest
+    high of the previous 5 trading days. Ranked by RSI.
     """
     data = fetch_daily_bars(tickers, period="1y", interval="1d")
     results, scanned, errors = [], 0, 0
 
     for t, df in data.items():
         try:
-            df = df.dropna(subset=["Close"])
-            if len(df) < 205:
+            df = df.dropna(subset=["Close", "High"])
+            if len(df) < 206:
                 continue
             closes = df["Close"]
             ltp = float(closes.iloc[-1])
+            today_high = float(df["High"].iloc[-1])
 
             scanned += 1
 
@@ -490,6 +492,10 @@ def scan_signal(tickers):
             if None in (e9, e20, e50, e100, e200):
                 continue
             if not (ltp > e9 > e20 > e50 > e100 > e200):
+                continue
+
+            prior_5_high = float(df["High"].iloc[-6:-1].max())
+            if prior_5_high <= 0 or today_high <= prior_5_high:
                 continue
 
             rsi_14 = rsi(closes, 14)
@@ -511,7 +517,7 @@ def format_signal_message(index_key, results, scanned):
     name = INDEX_NAMES[index_key]
     lines = [f"<b>✅ {name} — Signal (RSI&gt;={SIGNAL_MIN_RSI} + EMA stack)</b>",
              f"{now} · {scanned} scanned",
-             "<i>Price above EMA 9&gt;20&gt;50&gt;100&gt;200, ranked by RSI</i>"]
+             "<i>Price above EMA 9&gt;20&gt;50&gt;100&gt;200 + above 5-day high, ranked by RSI</i>"]
     if not results:
         lines.append("\nNo qualifying stocks found.")
         return "\n".join(lines)

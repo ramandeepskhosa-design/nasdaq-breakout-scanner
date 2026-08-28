@@ -1,10 +1,8 @@
 name: Gap-Up No-Lower-Wick Scan
 
 on:
-  schedule:
-    # Evening IST: NSE using today's just-closed candle, NASDAQ+S&P 500
-    # using the most recently completed US session. ~4:15 PM IST.
-    - cron: "45 10 * * 1-5"
+  # Auto-schedule disabled — superseded by the single simplified "signal"
+  # scan (RSI>=60 + EMA stack + 5-day high). Still runnable manually any time.
   workflow_dispatch: {}
 
 jobs:

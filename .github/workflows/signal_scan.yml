@@ -2,14 +2,17 @@ name: Signal Scan (RSI + EMA Stack)
 
 on:
   schedule:
-    # One single daily run, 7:00 PM IST. By then NSE has fully closed (3:30
-    # PM IST) so its data is settled, and NASDAQ's last session close is
-    # available ahead of tonight's open. Backup attempts guard against
-    # GitHub's scheduler lag; a dedupe file ensures only one send per day.
-    - cron: "30 13 * * 1-5"   # 7:00 PM IST
-    - cron: "45 13 * * 1-5"   # 7:15 PM IST
-    - cron: "00 14 * * 1-5"   # 7:30 PM IST
-  workflow_dispatch: {}   # manual trigger always runs, ignoring dedupe
+    # NSE: as early as possible after market open (9:15 AM IST), target
+    # 9:30 AM IST, with 2 backup attempts a few minutes apart.
+    - cron: "00 4 * * 1-5"    # 9:30 AM IST
+    - cron: "05 4 * * 1-5"    # 9:35 AM IST
+    - cron: "10 4 * * 1-5"    # 9:40 AM IST
+    # NASDAQ+S&P 500: as early as possible after US pre-market settles,
+    # target 8:00 PM IST, with 2 backup attempts.
+    - cron: "30 14 * * 1-5"   # 8:00 PM IST
+    - cron: "40 14 * * 1-5"   # 8:10 PM IST
+    - cron: "50 14 * * 1-5"   # 8:20 PM IST
+  workflow_dispatch: {}   # manual trigger always runs both, ignoring dedupe
 
 permissions:
   contents: write
@@ -27,40 +30,73 @@ jobs:
       - name: Install dependencies
         run: pip install yfinance pandas
 
-      - name: Check dedupe guard (skip if already sent today)
-        id: guard
+      - name: Determine which leg this run is for
+        id: leg
+        run: |
+          SCHED="${{ github.event.schedule }}"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "run_nse=true" >> "$GITHUB_OUTPUT"
+            echo "run_nasdaq=true" >> "$GITHUB_OUTPUT"
+          elif [ "$SCHED" = "00 4 * * 1-5" ] || [ "$SCHED" = "05 4 * * 1-5" ] || [ "$SCHED" = "10 4 * * 1-5" ]; then
+            echo "run_nse=true" >> "$GITHUB_OUTPUT"
+            echo "run_nasdaq=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run_nse=false" >> "$GITHUB_OUTPUT"
+            echo "run_nasdaq=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check NSE dedupe guard (skip if already sent today)
+        id: guard_nse
+        if: steps.leg.outputs.run_nse == 'true'
         run: |
           TODAY=$(date -u +%Y-%m-%d)
-          LAST=$(cat last_signal_scan.txt 2>/dev/null || echo "")
+          LAST=$(cat last_nse_signal.txt 2>/dev/null || echo "")
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"
           elif [ "$TODAY" = "$LAST" ]; then
-            echo "Already sent today ($LAST) — skipping duplicate scheduled run."
+            echo "Already sent NSE today ($LAST) — skipping duplicate."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check NASDAQ dedupe guard (skip if already sent today)
+        id: guard_nasdaq
+        if: steps.leg.outputs.run_nasdaq == 'true'
+        run: |
+          TODAY=$(date -u +%Y-%m-%d)
+          LAST=$(cat last_nasdaq_signal.txt 2>/dev/null || echo "")
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          elif [ "$TODAY" = "$LAST" ]; then
+            echo "Already sent NASDAQ today ($LAST) — skipping duplicate."
             echo "should_run=false" >> "$GITHUB_OUTPUT"
           else
             echo "should_run=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: NSE signal scan
-        if: steps.guard.outputs.should_run == 'true'
+        if: steps.leg.outputs.run_nse == 'true' && steps.guard_nse.outputs.should_run == 'true'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python nse_breakout_scan.py signal
 
       - name: NASDAQ + S&P 500 signal scan
-        if: steps.guard.outputs.should_run == 'true'
+        if: steps.leg.outputs.run_nasdaq == 'true' && steps.guard_nasdaq.outputs.should_run == 'true'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python breakout_scan.py signal
 
-      - name: Update dedupe guard
-        if: steps.guard.outputs.should_run == 'true' && github.event_name == 'schedule'
+      - name: Update dedupe guards and push
+        if: (steps.guard_nse.outputs.should_run == 'true' || steps.guard_nasdaq.outputs.should_run == 'true') && github.event_name == 'schedule'
         run: |
-          date -u +%Y-%m-%d > last_signal_scan.txt
+          TODAY=$(date -u +%Y-%m-%d)
+          if [ "${{ steps.leg.outputs.run_nse }}" = "true" ]; then echo "$TODAY" > last_nse_signal.txt; fi
+          if [ "${{ steps.leg.outputs.run_nasdaq }}" = "true" ]; then echo "$TODAY" > last_nasdaq_signal.txt; fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add last_signal_scan.txt
-          git commit -m "Update signal scan dedupe guard [skip ci]" || true
+          git add last_nse_signal.txt last_nasdaq_signal.txt 2>/dev/null || true
+          git commit -m "Update signal scan dedupe guards [skip ci]" || true
           git push || true

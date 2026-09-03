@@ -74,8 +74,9 @@ def run_nse_scan():
     indices = nse.load_indices()
     for key in ["nifty50", "nifty_next50", "midcap50", "smallcap250"]:
         tickers = indices[key]
-        results, scanned, errors = nse.scan_signal(tickers)
-        msg = "<b>📲 On-demand scan</b>\n" + nse.format_signal_message(key, results, scanned)
+        use_lifetime = (key == "smallcap250")
+        results, scanned, errors = nse.scan_signal(tickers, use_lifetime_high=use_lifetime)
+        msg = "<b>📲 On-demand scan</b>\n" + nse.format_signal_message(key, results, scanned, use_lifetime_high=use_lifetime)
         result = nse.send_telegram(msg)
         print(f"  {key}: Telegram send result:", result.get("ok"))
         time.sleep(1)

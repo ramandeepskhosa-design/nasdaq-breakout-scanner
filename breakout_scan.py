@@ -492,11 +492,16 @@ SIGNAL_MIN_RSI = 60   # simplified single-signal scan threshold
 def scan_signal(tickers):
     """Simplified single-signal scan (daily chart).
     Three conditions: RSI(14) >= 60, price above the full bullish EMA
-    stack (9 > 20 > 50 > 100 > 200), AND today's high above the highest
-    high of the previous 5 trading days. Ranked by RSI.
+    stack (9 > 20 > 50 > 100 > 200), AND today's high at/above the
+    stock's ALL-TIME (lifetime) high. Ranked by RSI.
+
+    Two-stage for speed: cheap RSI+EMA filter first on 1y daily data,
+    then only the survivors get the heavier lifetime-high check (period=max
+    weekly bars) — checking every one of 700+ tickers for max-period data
+    would be far too slow/rate-limited otherwise.
     """
     data = fetch_daily_bars(tickers, period="1y", interval="1d")
-    results, scanned, errors = [], 0, 0
+    candidates, scanned, errors = [], 0, 0
 
     for t, df in data.items():
         try:
@@ -515,18 +520,31 @@ def scan_signal(tickers):
             if not (ltp > e9 > e20 > e50 > e100 > e200):
                 continue
 
-            prior_5_high = float(df["High"].iloc[-6:-1].max())
-            if prior_5_high <= 0 or today_high <= prior_5_high:
-                continue
-
             rsi_14 = rsi(closes, 14)
             if rsi_14 is None or rsi_14 < SIGNAL_MIN_RSI:
                 continue
 
-            results.append({"sym": t, "close": round(ltp, 2), "rsi": round(rsi_14, 1)})
+            candidates.append({"sym": t, "close": round(ltp, 2), "rsi": round(rsi_14, 1),
+                                "today_high": today_high})
         except Exception:
             errors += 1
             continue
+
+    if not candidates:
+        return [], scanned, errors
+
+    # Stage 2: lifetime-high check, only on survivors
+    cand_tickers = [c["sym"] for c in candidates]
+    weekly = fetch_daily_bars(cand_tickers, period="max", interval="1wk")
+    results = []
+    for c in candidates:
+        wdf = weekly.get(c["sym"])
+        if wdf is None or wdf.empty:
+            continue
+        ath = float(wdf["High"].max())
+        if ath <= 0 or c["today_high"] < ath:
+            continue
+        results.append({"sym": c["sym"], "close": c["close"], "rsi": c["rsi"]})
 
     results.sort(key=lambda x: -x["rsi"])
     return results, scanned, errors
@@ -537,7 +555,7 @@ def format_signal_message(results, scanned):
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     lines = [f"<b>✅ NASDAQ + S&amp;P 500 — Signal (RSI&gt;={SIGNAL_MIN_RSI} + EMA stack)</b>",
              f"{now} · {scanned} scanned",
-             "<i>Price above EMA 9&gt;20&gt;50&gt;100&gt;200 + above 5-day high, ranked by RSI</i>"]
+             "<i>Price above EMA 9&gt;20&gt;50&gt;100&gt;200 + at/above lifetime high, ranked by RSI</i>"]
     if not results:
         lines.append("\nNo qualifying stocks found.")
         return "\n".join(lines)

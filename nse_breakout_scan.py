@@ -468,14 +468,16 @@ def main_smooth_ema():
 SIGNAL_MIN_RSI = 60   # simplified single-signal scan threshold
 
 
-def scan_signal(tickers):
+def scan_signal(tickers, use_lifetime_high=False):
     """Simplified single-signal scan (daily chart).
     Three conditions: RSI(14) >= 60, price above the full bullish EMA
-    stack (9 > 20 > 50 > 100 > 200), AND today's high above the highest
-    high of the previous 5 trading days. Ranked by RSI.
+    stack (9 > 20 > 50 > 100 > 200), AND today's high above either the
+    highest high of the previous 5 trading days (default) or the stock's
+    ALL-TIME high (use_lifetime_high=True, used for Smallcap 250). Ranked
+    by RSI.
     """
     data = fetch_daily_bars(tickers, period="1y", interval="1d")
-    results, scanned, errors = [], 0, 0
+    candidates, scanned, errors = [], 0, 0
 
     for t, df in data.items():
         try:
@@ -494,30 +496,53 @@ def scan_signal(tickers):
             if not (ltp > e9 > e20 > e50 > e100 > e200):
                 continue
 
-            prior_5_high = float(df["High"].iloc[-6:-1].max())
-            if prior_5_high <= 0 or today_high <= prior_5_high:
-                continue
+            if not use_lifetime_high:
+                prior_5_high = float(df["High"].iloc[-6:-1].max())
+                if prior_5_high <= 0 or today_high <= prior_5_high:
+                    continue
 
             rsi_14 = rsi(closes, 14)
             if rsi_14 is None or rsi_14 < SIGNAL_MIN_RSI:
                 continue
 
-            results.append({"sym": t, "close": round(ltp, 2), "rsi": round(rsi_14, 1)})
+            candidates.append({"sym": t, "close": round(ltp, 2), "rsi": round(rsi_14, 1),
+                                "today_high": today_high})
         except Exception:
             errors += 1
             continue
+
+    if not use_lifetime_high:
+        candidates.sort(key=lambda x: -x["rsi"])
+        return [{"sym": c["sym"], "close": c["close"], "rsi": c["rsi"]} for c in candidates], scanned, errors
+
+    if not candidates:
+        return [], scanned, errors
+
+    # Lifetime-high check, only on survivors (keeps this fast/light on Yahoo)
+    cand_tickers = [c["sym"] for c in candidates]
+    weekly = fetch_daily_bars(cand_tickers, period="max", interval="1wk")
+    results = []
+    for c in candidates:
+        wdf = weekly.get(c["sym"])
+        if wdf is None or wdf.empty:
+            continue
+        ath = float(wdf["High"].max())
+        if ath <= 0 or c["today_high"] < ath:
+            continue
+        results.append({"sym": c["sym"], "close": c["close"], "rsi": c["rsi"]})
 
     results.sort(key=lambda x: -x["rsi"])
     return results, scanned, errors
 
 
-def format_signal_message(index_key, results, scanned):
+def format_signal_message(index_key, results, scanned, use_lifetime_high=False):
     from datetime import datetime
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     name = INDEX_NAMES[index_key]
+    high_label = "at/above lifetime high" if use_lifetime_high else "above 5-day high"
     lines = [f"<b>✅ {name} — Signal (RSI&gt;={SIGNAL_MIN_RSI} + EMA stack)</b>",
              f"{now} · {scanned} scanned",
-             "<i>Price above EMA 9&gt;20&gt;50&gt;100&gt;200 + above 5-day high, ranked by RSI</i>"]
+             f"<i>Price above EMA 9&gt;20&gt;50&gt;100&gt;200 + {high_label}, ranked by RSI</i>"]
     if not results:
         lines.append("\nNo qualifying stocks found.")
         return "\n".join(lines)
@@ -531,10 +556,11 @@ def main_signal():
     indices = load_indices()
     for key in ["nifty50", "nifty_next50", "midcap50", "smallcap250"]:
         tickers = indices[key]
-        print(f"\nScanning {INDEX_NAMES[key]} ({len(tickers)} stocks) for signal (RSI+EMA stack)...")
-        results, scanned, errors = scan_signal(tickers)
+        use_lifetime = (key == "smallcap250")
+        print(f"\nScanning {INDEX_NAMES[key]} ({len(tickers)} stocks) for signal (RSI+EMA stack, lifetime_high={use_lifetime})...")
+        results, scanned, errors = scan_signal(tickers, use_lifetime_high=use_lifetime)
         print(f"  Scanned: {scanned}  Errors: {errors}  Found: {len(results)}")
-        msg = format_signal_message(key, results, scanned)
+        msg = format_signal_message(key, results, scanned, use_lifetime_high=use_lifetime)
         result = send_telegram(msg)
         print(f"  Telegram send result: {result.get('ok')}")
         time.sleep(1)

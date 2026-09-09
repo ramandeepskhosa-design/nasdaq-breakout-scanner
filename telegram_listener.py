@@ -37,6 +37,7 @@ WICK_WORDS      = {"wick", "nowick", "gap", "/wick", "/gap"}
 OPEN_WICK_WORDS = {"openwick", "earlywick", "/openwick", "/earlywick"}
 EMA20_WORDS     = {"ema20", "hold", "consolidate", "flag", "/ema20", "/hold"}
 SMOOTH_EMA_WORDS = {"smooth", "parallel", "coil", "/smooth", "/coil"}
+OPTIONS_WORDS    = {"options", "atm", "crossover", "/options", "/atm"}
 ALL_WORDS       = {"all", "/all"}
 
 
@@ -162,6 +163,15 @@ def run_smooth_ema_scan():
     print("  NASDAQ+S&P: Telegram send result:", result.get("ok"))
 
 
+def run_options_ema_scan():
+    print("Running on-demand options ATM crossover scan (NIFTY/BANKNIFTY/F&O stocks)...")
+    import options_ema_scan as opt
+    results, scanned, errors = opt.scan_ema_crossovers()
+    msg = "<b>📲 On-demand scan</b>\n" + opt.format_message(results, scanned)
+    result = opt.send_telegram(msg)
+    print("  Telegram send result:", result.get("ok"))
+
+
 def main():
     offset = get_offset()
     print(f"Checking Telegram for messages after update_id {offset}...")
@@ -174,8 +184,8 @@ def main():
         return
 
     max_update_id = offset
-    want_nasdaq, want_nse, want_wick, want_open_wick, want_ema20, want_smooth = \
-        False, False, False, False, False, False
+    want_nasdaq, want_nse, want_wick, want_open_wick, want_ema20, want_smooth, want_options = \
+        False, False, False, False, False, False, False
 
     for u in updates:
         max_update_id = max(max_update_id, u["update_id"])
@@ -190,6 +200,9 @@ def main():
         elif text in NSE_WORDS:
             want_nse = True
             print(f"  NSE trigger matched: '{text}'")
+        elif text in OPTIONS_WORDS:
+            want_options = True
+            print(f"  OPTIONS trigger matched: '{text}'")
         elif text in SMOOTH_EMA_WORDS:
             want_smooth = True
             print(f"  SMOOTH EMA trigger matched: '{text}'")
@@ -203,17 +216,19 @@ def main():
             want_wick = True
             print(f"  WICK trigger matched: '{text}'")
         elif text in ALL_WORDS:
-            want_nasdaq = want_nse = want_wick = want_open_wick = want_ema20 = want_smooth = True
+            want_nasdaq = want_nse = want_wick = want_open_wick = want_ema20 = want_smooth = want_options = True
             print(f"  ALL trigger matched: '{text}'")
 
     save_offset(max_update_id)
 
-    if not (want_nasdaq or want_nse or want_wick or want_open_wick or want_ema20 or want_smooth):
+    if not (want_nasdaq or want_nse or want_wick or want_open_wick or want_ema20 or want_smooth or want_options):
         print("No trigger word found in new messages — nothing to do.")
         return
 
     if want_nasdaq:
         run_nasdaq_scan()
+    if want_options:
+        run_options_ema_scan()
     if want_open_wick:
         run_open_wick_scan()
     if want_ema20:

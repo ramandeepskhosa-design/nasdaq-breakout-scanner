@@ -38,6 +38,7 @@ OPEN_WICK_WORDS = {"openwick", "earlywick", "/openwick", "/earlywick"}
 EMA20_WORDS     = {"ema20", "hold", "consolidate", "flag", "/ema20", "/hold"}
 SMOOTH_EMA_WORDS = {"smooth", "parallel", "coil", "/smooth", "/coil"}
 OPTIONS_WORDS    = {"options", "atm", "crossover", "/options", "/atm"}
+TREND_WORDS      = {"trend", "extreme", "daylow", "dayhigh", "/trend"}
 ALL_WORDS       = {"all", "/all"}
 
 
@@ -172,6 +173,30 @@ def run_options_ema_scan():
     print("  Telegram send result:", result.get("ok"))
 
 
+def run_trend_extreme_scan():
+    print("Running on-demand trending-at-extreme scan (NSE)...")
+    import trend_extreme_scan as tex
+    import nse_breakout_scan as nse
+    indices = nse.load_indices()
+    for key in ["nifty50", "nifty_next50", "midcap50", "smallcap250"]:
+        tickers = [f"{s}.NS" for s in indices[key]]
+        name = nse.INDEX_NAMES[key]
+        results, scanned, errors = tex.scan_trending_at_extreme(tickers, tz="Asia/Kolkata")
+        for r in results:
+            r["sym"] = r["sym"].replace(".NS", "")
+        msg = "<b>📲 On-demand scan</b>\n" + tex.format_message(name, results, scanned, currency="₹")
+        result = tex.send_telegram(msg)
+        print(f"  {key}: Telegram send result:", result.get("ok"))
+        time.sleep(1)
+
+    print("Running on-demand trending-at-extreme scan (NASDAQ + S&P 500)...")
+    tickers = load_universe()
+    results, scanned, errors = tex.scan_trending_at_extreme(tickers, tz="America/New_York")
+    msg = "<b>📲 On-demand scan</b>\n" + tex.format_message("NASDAQ + S&P 500", results, scanned, currency="$")
+    result = tex.send_telegram(msg)
+    print("  NASDAQ+S&P: Telegram send result:", result.get("ok"))
+
+
 def main():
     offset = get_offset()
     print(f"Checking Telegram for messages after update_id {offset}...")
@@ -184,8 +209,8 @@ def main():
         return
 
     max_update_id = offset
-    want_nasdaq, want_nse, want_wick, want_open_wick, want_ema20, want_smooth, want_options = \
-        False, False, False, False, False, False, False
+    want_nasdaq, want_nse, want_wick, want_open_wick, want_ema20, want_smooth, want_options, want_trend = \
+        False, False, False, False, False, False, False, False
 
     for u in updates:
         max_update_id = max(max_update_id, u["update_id"])
@@ -200,6 +225,9 @@ def main():
         elif text in NSE_WORDS:
             want_nse = True
             print(f"  NSE trigger matched: '{text}'")
+        elif text in TREND_WORDS:
+            want_trend = True
+            print(f"  TREND EXTREME trigger matched: '{text}'")
         elif text in OPTIONS_WORDS:
             want_options = True
             print(f"  OPTIONS trigger matched: '{text}'")
@@ -216,12 +244,12 @@ def main():
             want_wick = True
             print(f"  WICK trigger matched: '{text}'")
         elif text in ALL_WORDS:
-            want_nasdaq = want_nse = want_wick = want_open_wick = want_ema20 = want_smooth = want_options = True
+            want_nasdaq = want_nse = want_wick = want_open_wick = want_ema20 = want_smooth = want_options = want_trend = True
             print(f"  ALL trigger matched: '{text}'")
 
     save_offset(max_update_id)
 
-    if not (want_nasdaq or want_nse or want_wick or want_open_wick or want_ema20 or want_smooth or want_options):
+    if not (want_nasdaq or want_nse or want_wick or want_open_wick or want_ema20 or want_smooth or want_options or want_trend):
         print("No trigger word found in new messages — nothing to do.")
         return
 
@@ -229,6 +257,8 @@ def main():
         run_nasdaq_scan()
     if want_options:
         run_options_ema_scan()
+    if want_trend:
+        run_trend_extreme_scan()
     if want_open_wick:
         run_open_wick_scan()
     if want_ema20:

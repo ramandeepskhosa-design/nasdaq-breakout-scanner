@@ -40,6 +40,7 @@ SMOOTH_EMA_WORDS = {"smooth", "parallel", "coil", "/smooth", "/coil"}
 OPTIONS_WORDS    = {"options", "atm", "crossover", "/options", "/atm"}
 TREND_WORDS       = {"trend", "extreme", "smoothtrend", "/trend"}
 DAY_EXTREME_WORDS = {"dayhigh", "daylow", "highlow", "/dayhigh", "/daylow"}
+CRYPTO_WORDS      = {"crypto", "bitcoin", "btc", "/crypto", "/btc"}
 ALL_WORDS       = {"all", "/all"}
 
 
@@ -220,6 +221,15 @@ def run_day_extreme_scan():
     print("  NASDAQ+S&P: Telegram send result:", result.get("ok"))
 
 
+def run_crypto_scan():
+    print("Running on-demand crypto scan (BTC/ETH/SOL/BNB/XRP/DOGE)...")
+    import crypto_scan as crypto
+    rows = crypto.analyze()
+    msg = "<b>📲 On-demand scan</b>\n" + crypto.format_message(rows)
+    result = crypto.send_telegram(msg)
+    print("  Telegram send result:", result.get("ok"))
+
+
 def main():
     offset = get_offset()
     print(f"Checking Telegram for messages after update_id {offset}...")
@@ -232,8 +242,8 @@ def main():
         return
 
     max_update_id = offset
-    want_nasdaq, want_nse, want_wick, want_open_wick, want_ema20, want_smooth, want_options, want_trend, want_dayext = \
-        False, False, False, False, False, False, False, False, False
+    want_nasdaq, want_nse, want_wick, want_open_wick, want_ema20, want_smooth, want_options, want_trend, want_dayext, want_crypto = \
+        False, False, False, False, False, False, False, False, False, False
 
     for u in updates:
         max_update_id = max(max_update_id, u["update_id"])
@@ -248,6 +258,9 @@ def main():
         elif text in NSE_WORDS:
             want_nse = True
             print(f"  NSE trigger matched: '{text}'")
+        elif text in CRYPTO_WORDS:
+            want_crypto = True
+            print(f"  CRYPTO trigger matched: '{text}'")
         elif text in DAY_EXTREME_WORDS:
             want_dayext = True
             print(f"  DAY HIGH/LOW trigger matched: '{text}'")
@@ -270,12 +283,12 @@ def main():
             want_wick = True
             print(f"  WICK trigger matched: '{text}'")
         elif text in ALL_WORDS:
-            want_nasdaq = want_nse = want_wick = want_open_wick = want_ema20 = want_smooth = want_options = want_trend = want_dayext = True
+            want_nasdaq = want_nse = want_wick = want_open_wick = want_ema20 = want_smooth = want_options = want_trend = want_dayext = want_crypto = True
             print(f"  ALL trigger matched: '{text}'")
 
     save_offset(max_update_id)
 
-    if not (want_nasdaq or want_nse or want_wick or want_open_wick or want_ema20 or want_smooth or want_options or want_trend or want_dayext):
+    if not (want_nasdaq or want_nse or want_wick or want_open_wick or want_ema20 or want_smooth or want_options or want_trend or want_dayext or want_crypto):
         print("No trigger word found in new messages — nothing to do.")
         return
 
@@ -287,6 +300,8 @@ def main():
         run_trend_extreme_scan()
     if want_dayext:
         run_day_extreme_scan()
+    if want_crypto:
+        run_crypto_scan()
     if want_open_wick:
         run_open_wick_scan()
     if want_ema20:

@@ -41,6 +41,7 @@ OPTIONS_WORDS    = {"options", "atm", "crossover", "/options", "/atm"}
 TREND_WORDS       = {"trend", "extreme", "smoothtrend", "/trend"}
 DAY_EXTREME_WORDS = {"dayhigh", "daylow", "highlow", "/dayhigh", "/daylow"}
 CRYPTO_WORDS      = {"crypto", "bitcoin", "btc", "/crypto", "/btc"}
+INSTITUTIONAL_WORDS = {"institutional", "fullbody", "conviction", "structure", "/institutional"}
 ALL_WORDS       = {"all", "/all"}
 
 
@@ -230,6 +231,28 @@ def run_crypto_scan():
     print("  Telegram send result:", result.get("ok"))
 
 
+def run_institutional_trend_scan():
+    print("Running on-demand institutional trend (full-body/low-wick) scan (NSE)...")
+    import institutional_trend_scan as its
+    import nse_breakout_scan as nse
+    indices = nse.load_indices()
+    for key in ["nifty50", "nifty_next50", "midcap50", "smallcap250"]:
+        tickers = [f"{s}.NS" for s in indices[key]]
+        name = nse.INDEX_NAMES[key]
+        results, scanned, errors = its.scan_institutional_trend(tickers, "Asia/Kolkata")
+        msg = "<b>📲 On-demand scan</b>\n" + its.format_message(name, results, scanned, "₹")
+        result = its.tex.send_telegram(msg)
+        print(f"  {key}: Telegram send result:", result.get("ok"))
+        time.sleep(1)
+
+    print("Running on-demand institutional trend scan (NASDAQ + S&P 500)...")
+    tickers = load_universe()
+    results, scanned, errors = its.scan_institutional_trend(tickers, "America/New_York")
+    msg = "<b>📲 On-demand scan</b>\n" + its.format_message("NASDAQ + S&P 500", results, scanned, "$")
+    result = its.tex.send_telegram(msg)
+    print("  NASDAQ+S&P: Telegram send result:", result.get("ok"))
+
+
 def main():
     offset = get_offset()
     print(f"Checking Telegram for messages after update_id {offset}...")
@@ -242,8 +265,8 @@ def main():
         return
 
     max_update_id = offset
-    want_nasdaq, want_nse, want_wick, want_open_wick, want_ema20, want_smooth, want_options, want_trend, want_dayext, want_crypto = \
-        False, False, False, False, False, False, False, False, False, False
+    want_nasdaq, want_nse, want_wick, want_open_wick, want_ema20, want_smooth, want_options, want_trend, want_dayext, want_crypto, want_institutional = \
+        False, False, False, False, False, False, False, False, False, False, False
 
     for u in updates:
         max_update_id = max(max_update_id, u["update_id"])
@@ -258,6 +281,9 @@ def main():
         elif text in NSE_WORDS:
             want_nse = True
             print(f"  NSE trigger matched: '{text}'")
+        elif text in INSTITUTIONAL_WORDS:
+            want_institutional = True
+            print(f"  INSTITUTIONAL TREND trigger matched: '{text}'")
         elif text in CRYPTO_WORDS:
             want_crypto = True
             print(f"  CRYPTO trigger matched: '{text}'")
@@ -283,12 +309,12 @@ def main():
             want_wick = True
             print(f"  WICK trigger matched: '{text}'")
         elif text in ALL_WORDS:
-            want_nasdaq = want_nse = want_wick = want_open_wick = want_ema20 = want_smooth = want_options = want_trend = want_dayext = want_crypto = True
+            want_nasdaq = want_nse = want_wick = want_open_wick = want_ema20 = want_smooth = want_options = want_trend = want_dayext = want_crypto = want_institutional = True
             print(f"  ALL trigger matched: '{text}'")
 
     save_offset(max_update_id)
 
-    if not (want_nasdaq or want_nse or want_wick or want_open_wick or want_ema20 or want_smooth or want_options or want_trend or want_dayext or want_crypto):
+    if not (want_nasdaq or want_nse or want_wick or want_open_wick or want_ema20 or want_smooth or want_options or want_trend or want_dayext or want_crypto or want_institutional):
         print("No trigger word found in new messages — nothing to do.")
         return
 
@@ -302,6 +328,8 @@ def main():
         run_day_extreme_scan()
     if want_crypto:
         run_crypto_scan()
+    if want_institutional:
+        run_institutional_trend_scan()
     if want_open_wick:
         run_open_wick_scan()
     if want_ema20:

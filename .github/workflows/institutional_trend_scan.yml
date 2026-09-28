@@ -1,0 +1,57 @@
+name: Institutional Trend Scan (Full-Body / Low-Wick)
+
+on:
+  schedule:
+    # ~2:45 PM IST — enough of the day's candles formed to judge conviction
+    # for tomorrow's trade, with backup attempts a few minutes apart.
+    - cron: "15 9 * * 1-5"    # 2:45 PM IST
+    - cron: "20 9 * * 1-5"    # 2:50 PM IST
+    - cron: "25 9 * * 1-5"    # 2:55 PM IST
+  workflow_dispatch: {}   # manual trigger always runs, ignoring dedupe
+
+permissions:
+  contents: write
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install yfinance pandas numpy
+
+      - name: Check dedupe guard (skip if already sent today)
+        id: guard
+        run: |
+          TODAY=$(date -u +%Y-%m-%d)
+          LAST=$(cat last_institutional_scan.txt 2>/dev/null || echo "")
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          elif [ "$TODAY" = "$LAST" ]; then
+            echo "Already sent today ($LAST) — skipping duplicate scheduled run."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Institutional trend scan (NSE)
+        if: steps.guard.outputs.should_run == 'true'
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python institutional_trend_scan.py
+
+      - name: Update dedupe guard
+        if: steps.guard.outputs.should_run == 'true' && github.event_name == 'schedule'
+        run: |
+          date -u +%Y-%m-%d > last_institutional_scan.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add last_institutional_scan.txt
+          git commit -m "Update institutional scan dedupe guard [skip ci]" || true
+          git push || true

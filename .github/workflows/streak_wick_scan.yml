@@ -1,9 +1,12 @@
-name: Institutional Trend Scan (Full-Body / Low-Wick)
+name: Institutional Streak Scan (Trailing Wick)
 
 on:
-  # Auto-schedule disabled — superseded by streak_wick_scan.yml (the
-  # trailing-wick-only model) as the sole automatic alert. Still
-  # runnable manually any time.
+  schedule:
+    # ~3:00 PM IST — enough candles formed to judge today's conviction
+    # for tomorrow's trade, with backup attempts a few minutes apart.
+    - cron: "30 9 * * 1-5"    # 3:00 PM IST
+    - cron: "35 9 * * 1-5"    # 3:05 PM IST
+    - cron: "40 9 * * 1-5"    # 3:10 PM IST
   workflow_dispatch: {}   # manual trigger always runs, ignoring dedupe
 
 permissions:
@@ -26,7 +29,7 @@ jobs:
         id: guard
         run: |
           TODAY=$(date -u +%Y-%m-%d)
-          LAST=$(cat last_institutional_scan.txt 2>/dev/null || echo "")
+          LAST=$(cat last_streak_scan.txt 2>/dev/null || echo "")
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             echo "should_run=true" >> "$GITHUB_OUTPUT"
           elif [ "$TODAY" = "$LAST" ]; then
@@ -36,19 +39,19 @@ jobs:
             echo "should_run=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Institutional trend scan (NSE)
+      - name: Institutional streak scan (NSE)
         if: steps.guard.outputs.should_run == 'true'
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python institutional_trend_scan.py
+        run: python streak_wick_scan.py
 
       - name: Update dedupe guard
         if: steps.guard.outputs.should_run == 'true' && github.event_name == 'schedule'
         run: |
-          date -u +%Y-%m-%d > last_institutional_scan.txt
+          date -u +%Y-%m-%d > last_streak_scan.txt
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add last_institutional_scan.txt
-          git commit -m "Update institutional scan dedupe guard [skip ci]" || true
+          git add last_streak_scan.txt
+          git commit -m "Update streak scan dedupe guard [skip ci]" || true
           git push || true

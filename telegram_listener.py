@@ -232,25 +232,14 @@ def run_crypto_scan():
 
 
 def run_institutional_trend_scan():
-    print("Running on-demand institutional trend (full-body/low-wick) scan (NSE)...")
-    import institutional_trend_scan as its
-    import nse_breakout_scan as nse
-    indices = nse.load_indices()
-    for key in ["nifty50", "nifty_next50", "midcap50", "smallcap250"]:
-        tickers = [f"{s}.NS" for s in indices[key]]
-        name = nse.INDEX_NAMES[key]
-        results, scanned, errors = its.scan_institutional_trend(tickers, "Asia/Kolkata")
-        msg = "<b>📲 On-demand scan</b>\n" + its.format_message(name, results, scanned, "₹")
-        result = its.tex.send_telegram(msg)
-        print(f"  {key}: Telegram send result:", result.get("ok"))
-        time.sleep(1)
-
-    print("Running on-demand institutional trend scan (NASDAQ + S&P 500)...")
-    tickers = load_universe()
-    results, scanned, errors = its.scan_institutional_trend(tickers, "America/New_York")
-    msg = "<b>📲 On-demand scan</b>\n" + its.format_message("NASDAQ + S&P 500", results, scanned, "$")
-    result = its.tex.send_telegram(msg)
-    print("  NASDAQ+S&P: Telegram send result:", result.get("ok"))
+    """Repointed to the corrected trailing-wick-streak model (approved
+    2026-09-29) — the earlier HH/HL-structure model is still in
+    institutional_trend_scan.py if ever needed manually."""
+    print("Running on-demand institutional streak scan (NSE)...")
+    import streak_wick_scan as sws
+    sws.run_nse()
+    print("Running on-demand institutional streak scan (NASDAQ + S&P 500)...")
+    sws.run_nasdaq()
 
 
 def main():

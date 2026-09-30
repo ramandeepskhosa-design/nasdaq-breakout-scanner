@@ -21,7 +21,9 @@ TELEGRAM_CHAT_ID   = os.environ["TELEGRAM_CHAT_ID"]
 
 MAX_TRAILING_WICK = 20.0   # closing-side wick must stay <= this % of the candle's range
 MIN_STREAK        = 3      # need at least this many consecutive qualifying candles
-MAX_CANDLES_AGO   = 6      # streak must have ended within the last N candles (stay relevant)
+MIN_CANDLES_AGO   = 1      # streak must NOT still be forming right at the latest candle (unconfirmed)
+MAX_CANDLES_AGO   = 4      # ...and must not be stale either (2026-09-29 review: 0 or 6 both failed, 1-4 all won)
+MIN_VOL_RATIO     = 1.0    # streak's avg volume must be >= this x the day's average per-candle volume
 
 
 def scan_streak(tickers, tz):
@@ -48,6 +50,7 @@ def scan_streak(tickers, tz):
             h = today_bars["High"].values.astype(float)
             l = today_bars["Low"].values.astype(float)
             c = today_bars["Close"].values.astype(float)
+            v = today_bars["Volume"].values.astype(float)
             n = len(o)
 
             dirs, qualifies = [], []
@@ -76,7 +79,17 @@ def scan_streak(tickers, tz):
             if best_len < MIN_STREAK:
                 continue
             candles_ago = (n - 1) - best_end
-            if candles_ago > MAX_CANDLES_AGO:
+            if candles_ago < MIN_CANDLES_AGO or candles_ago > MAX_CANDLES_AGO:
+                continue
+
+            # Volume check: the streak itself must be on above-average volume,
+            # not a thin/quiet move (2026-09-29 review: TATACHEM's failed
+            # streak ran on 0.5x average volume).
+            day_avg_vol = v.mean()
+            streak_start = best_end - best_len + 1
+            streak_avg_vol = v[streak_start:best_end + 1].mean()
+            vol_ratio = streak_avg_vol / day_avg_vol if day_avg_vol > 0 else 0
+            if vol_ratio < MIN_VOL_RATIO:
                 continue
 
             ltp = float(c[-1])
@@ -84,6 +97,7 @@ def scan_streak(tickers, tz):
                 "sym": t.replace(".NS", ""), "close": round(ltp, 2),
                 "direction": "bullish" if best_dir == "green" else "bearish",
                 "streak": best_len, "candles_ago": candles_ago,
+                "vol_ratio": round(vol_ratio, 2),
             })
         except Exception:
             continue
@@ -96,14 +110,14 @@ def format_message(title, results, scanned, currency="₹"):
     from datetime import datetime
     now = datetime.now().strftime("%Y-%m-%d %H:%M")
     lines = [f"<b>🕯️ {title} — Institutional Streak</b>", f"{now} · {scanned} scanned",
-             f"<i>{MIN_STREAK}+ candles, closing-side wick &lt;={MAX_TRAILING_WICK}%, within last {MAX_CANDLES_AGO} candles</i>", ""]
+             f"<i>{MIN_STREAK}+ candles, wick&lt;={MAX_TRAILING_WICK}%, ended {MIN_CANDLES_AGO}-{MAX_CANDLES_AGO} candles ago, vol&gt;={MIN_VOL_RATIO}x day avg</i>", ""]
     if not results:
         lines.append("None found.")
         return "\n".join(lines)
     lines.append(f"<b>{len(results)} found:</b>\n")
     for i, r in enumerate(results[:30], 1):
         arrow = "🔼 CE" if r["direction"] == "bullish" else "🔽 PE"
-        lines.append(f"{i}. <b>{r['sym']}</b>  {currency}{r['close']}  {arrow}  {r['streak']}-candle streak ({r['candles_ago']} ago)")
+        lines.append(f"{i}. <b>{r['sym']}</b>  {currency}{r['close']}  {arrow}  {r['streak']}-candle streak ({r['candles_ago']} ago, vol {r['vol_ratio']}x)")
     return "\n".join(lines)
 
 

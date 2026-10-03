@@ -1,0 +1,29 @@
+//@version=5
+indicator("Impulse Candle (big full body)", shorttitle="Impulse", overlay=true)
+
+// One big full-body candle: body is most of the candle's range (tiny wicks),
+// AND the body is several times a normal candle's body,
+// AND (optionally) volume is well above average.
+
+minBodyPct = input.float(80,  "Min body (% of candle range)",      minval=50, maxval=100)
+mult       = input.float(3.0, "Body vs average body (x)",          minval=1.0)
+avgLen     = input.int(20,    "Average length (bars)",             minval=5)
+useVol     = input.bool(true, "Require volume spike")
+volMult    = input.float(1.5, "Volume vs average (x)",             minval=1.0)
+
+body    = math.abs(close - open)
+rng     = high - low
+bodyPct = rng > 0 ? body / rng * 100 : 0.0
+avgBody = ta.sma(body, avgLen)[1]
+avgVol  = ta.sma(volume, avgLen)[1]
+
+isImpulse = bodyPct >= minBodyPct and not na(avgBody) and body >= mult * avgBody and (not useVol or volume >= volMult * avgVol)
+bullHit = barstate.isconfirmed and isImpulse and close > open
+bearHit = barstate.isconfirmed and isImpulse and close < open
+
+barcolor(bullHit ? color.lime : bearHit ? color.fuchsia : na)
+plotshape(bullHit, "Bullish impulse", shape.triangleup,   location.belowbar, color.lime,    size=size.small, text="IMP")
+plotshape(bearHit, "Bearish impulse", shape.triangledown, location.abovebar, color.fuchsia, size=size.small, text="IMP")
+
+alertcondition(bullHit, "Impulse BULLISH candle", "{{exchange}}:{{ticker}} {{interval}} - big bullish full-body candle, close {{close}}")
+alertcondition(bearHit, "Impulse BEARISH candle", "{{exchange}}:{{ticker}} {{interval}} - big bearish full-body candle, close {{close}}")

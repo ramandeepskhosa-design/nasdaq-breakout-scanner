@@ -41,6 +41,8 @@ IMPULSE_MULT     = 3.0
 AVG_LEN          = 20
 NW_MAX_WICK      = 20.0
 NW_STREAK        = 3
+EMA_PERIODS      = (5, 10, 20, 50, 100, 200)
+EMA_MIN_BARS     = 250   # EMA200 needs a long warm-up to be meaningful
 BAR              = timedelta(minutes=15)
 CRYPTO = {"BTC-USD": "Bitcoin", "ETH-USD": "Ethereum", "SOL-USD": "Solana",
           "BNB-USD": "BNB", "XRP-USD": "XRP", "DOGE-USD": "Dogecoin"}
@@ -80,12 +82,12 @@ def flatten(sub):
     return sub
 
 
-def fetch(tickers, chunk=50):
+def fetch(tickers, chunk=50, period="2d"):
     out = {}
     for i in range(0, len(tickers), chunk):
         part = tickers[i:i + chunk]
         try:
-            df = yf.download(part, period="2d", interval="15m", group_by="ticker",
+            df = yf.download(part, period=period, interval="15m", group_by="ticker",
                              threads=True, progress=False, auto_adjust=False)
         except Exception as e:
             print(f"  fetch chunk {i} failed: {e}")
@@ -100,6 +102,17 @@ def fetch(tickers, chunk=50):
                 continue
         time.sleep(1)
     return out
+
+
+def ema_aligned(closes, direction):
+    """Bull: EMA5 > EMA10 > EMA20 > EMA50 > EMA100 > EMA200 on the 15m chart.
+    Bear: the exact reverse. Evaluated at the last completed candle."""
+    if len(closes) < EMA_MIN_BARS:
+        return False
+    e = [closes.ewm(span=p, adjust=False).mean().iloc[-1] for p in EMA_PERIODS]
+    if direction == "bull":
+        return all(e[i] > e[i + 1] for i in range(len(e) - 1))
+    return all(e[i] < e[i + 1] for i in range(len(e) - 1))
 
 
 def completed(df, now_utc):
@@ -179,7 +192,7 @@ def run_cycle(markets, state, force, dry, only):
             continue
         t0 = time.time()
         data = fetch(m["tickers"])
-        lines = []
+        pending = []
         for t, df in data.items():
             bars = completed(df, now)
             if len(bars) < AVG_LEN + 2:
@@ -195,16 +208,29 @@ def run_cycle(markets, state, force, dry, only):
                 if key in state:
                     continue
                 state[key] = now.isoformat()
+                pending.append((t, kind, d, detail, float(bars["Close"].iloc[-1])))
+
+        # Stage 2: only candidates get the long history needed for EMA5..EMA200
+        lines, dropped = [], 0
+        if pending:
+            long_data = fetch(sorted({p[0] for p in pending}),
+                              period="10d" if name == "CRYPTO" else "30d")
+            for t, kind, d, detail, px in pending:
+                ldf = long_data.get(t)
+                closes = completed(ldf, now)["Close"] if ldf is not None else None
+                if closes is None or not ema_aligned(closes, d):
+                    dropped += 1
+                    continue
                 sym = CRYPTO.get(t, t.replace(".NS", ""))
                 icon = "🟢" if d == "bull" else "🔴"
                 label = "IMPULSE" if kind == "IMPULSE" else "NO-WICK"
-                px = float(bars["Close"].iloc[-1])
                 lines.append(f"{icon} <b>{sym}</b> {m['cur']}{px:,.2f}  {label} {d.upper()} - {detail}")
         print(f"[{datetime.now().strftime('%H:%M:%S')}] {name}: {len(data)} fetched, "
+              f"{len(pending)} candidates, {dropped} dropped (EMAs not aligned), "
               f"{len(lines)} alerts, {time.time() - t0:.0f}s")
         if lines:
             for k in range(0, len(lines), 40):
-                head = f"<b>🕯️ Live candle alert - {name} (15m)</b>\n"
+                head = f"<b>🕯️ Live candle alert - {name} (15m, EMA 5/10/20/50/100/200 aligned)</b>\n"
                 send(head + "\n".join(lines[k:k + 40]), dry)
 
 

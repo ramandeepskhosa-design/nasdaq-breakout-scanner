@@ -196,5 +196,82 @@ def main():
     print("\nTelegram send result:", result.get("ok"))
 
 
+STREAK_WINDOW      = 48     # last 48 x 15m candles = 12 hours (crypto has no "session")
+STREAK_MIN         = 3
+STREAK_MAX_WICK    = 20.0   # closing-side wick <= 20% of the candle's range
+STREAK_MIN_AGO     = 1
+STREAK_MAX_AGO     = 4
+STREAK_MIN_VOL     = 1.0
+
+
+def streak_for_coin(df):
+    """No-wick streak on the last STREAK_WINDOW 15m candles. Returns dict or None.
+    Same rules as streak_wick_scan.py (stocks), minus the calendar-day restriction."""
+    import pandas as pd
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(-1)
+    df = df.dropna(subset=["Open", "High", "Low", "Close"]).iloc[-STREAK_WINDOW:]
+    if len(df) < STREAK_MIN + STREAK_MAX_AGO:
+        return None
+    o, h, l, c = (df[k].values.astype(float) for k in ("Open", "High", "Low", "Close"))
+    v = df["Volume"].values.astype(float)
+    n = len(o)
+
+    dirs, ok = [], []
+    for i in range(n):
+        rng = h[i] - l[i]
+        if rng <= 0:
+            dirs.append(None); ok.append(False); continue
+        red = c[i] < o[i]
+        trailing = ((c[i] - l[i]) if red else (h[i] - c[i])) / rng * 100
+        dirs.append("red" if red else "green")
+        ok.append(trailing <= STREAK_MAX_WICK)
+
+    best_len, best_end, best_dir, run, run_dir = 0, None, None, 0, None
+    for i in range(n):
+        if ok[i] and dirs[i] == run_dir:
+            run += 1
+        elif ok[i]:
+            run, run_dir = 1, dirs[i]
+        else:
+            run, run_dir = 0, None
+        if run > best_len:
+            best_len, best_end, best_dir = run, i, run_dir
+
+    if best_len < STREAK_MIN:
+        return None
+    ago = (n - 1) - best_end
+    if ago < STREAK_MIN_AGO or ago > STREAK_MAX_AGO:
+        return None
+    day_avg = v.mean()
+    vol_ratio = v[best_end - best_len + 1: best_end + 1].mean() / day_avg if day_avg > 0 else 0
+    if vol_ratio < STREAK_MIN_VOL:
+        return None
+    return {"streak": best_len, "ago": ago, "vol": round(vol_ratio, 2),
+            "dir": "bullish" if best_dir == "green" else "bearish", "ltp": float(c[-1])}
+
+
+def run_streak():
+    data = fetch_15m(list(COINS.keys()), period="5d")
+    lines = ["<b>🕯️ Crypto — No-Wick Streak (15m)</b>",
+             f"<i>{STREAK_MIN}+ candles, closing-side wick &lt;={STREAK_MAX_WICK}%, ended {STREAK_MIN_AGO}-{STREAK_MAX_AGO} candles ago, vol&gt;={STREAK_MIN_VOL}x</i>", ""]
+    hits = 0
+    for t, name in COINS.items():
+        df = data.get(t)
+        r = streak_for_coin(df) if df is not None else None
+        if r:
+            hits += 1
+            arrow = "🔼 LONG" if r["dir"] == "bullish" else "🔽 SHORT"
+            lines.append(f"<b>{name}</b>  ${r['ltp']:,.2f}  {arrow}  {r['streak']}-candle streak ({r['ago']} ago, vol {r['vol']}x)")
+    if not hits:
+        lines.append("No qualifying streak right now.")
+    res = send_telegram("\n".join(lines))
+    print(f"streak hits={hits} sent={res.get('ok')}")
+
+
 if __name__ == "__main__":
-    main()
+    import sys
+    if len(sys.argv) > 1 and sys.argv[1] == "streak":
+        run_streak()
+    else:
+        main()

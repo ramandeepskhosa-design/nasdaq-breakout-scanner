@@ -229,6 +229,7 @@ def run_crypto_scan():
     msg = "<b>📲 On-demand scan</b>\n" + crypto.format_message(rows)
     result = crypto.send_telegram(msg)
     print("  Telegram send result:", result.get("ok"))
+    crypto.run_streak()
 
 
 def run_institutional_trend_scan():

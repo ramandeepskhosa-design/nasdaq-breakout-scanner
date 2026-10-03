@@ -1,0 +1,40 @@
+//@version=5
+indicator("No-Wick Streak (institutional)", shorttitle="NoWick", overlay=true)
+
+// A "streak" = N consecutive same-colour candles where the wick on the
+// CLOSING side is small (lower wick on red candles, upper wick on green).
+// Price keeps closing at its extreme with no pushback = conviction.
+
+minStreak = input.int(3,    "Min streak (candles)",          minval=2)
+maxWick   = input.float(20, "Max closing-side wick (% of candle range)", minval=0, maxval=100)
+useVol    = input.bool(true, "Require volume >= average")
+volLen    = input.int(48,   "Volume average length (bars)",  minval=2)
+
+volAvg = ta.sma(volume, volLen)
+rng    = high - low
+isRed  = close < open
+trail  = rng > 0 ? (isRed ? (close - low) : (high - close)) / rng * 100 : na
+qual   = not na(trail) and trail <= maxWick and (not useVol or volume >= volAvg)
+dir    = isRed ? -1 : 1
+
+var int streak    = 0
+var int streakDir = 0
+if qual
+    if dir == streakDir
+        streak := streak + 1
+    else
+        streak := 1
+        streakDir := dir
+else
+    streak := 0
+    streakDir := 0
+
+bullHit = barstate.isconfirmed and streak >= minStreak and streakDir == 1
+bearHit = barstate.isconfirmed and streak >= minStreak and streakDir == -1
+
+barcolor(streak >= minStreak ? (streakDir == 1 ? color.lime : color.fuchsia) : na)
+plotshape(bullHit, "Bullish streak", shape.triangleup,   location.belowbar, color.lime,    size=size.small, text="NW")
+plotshape(bearHit, "Bearish streak", shape.triangledown, location.abovebar, color.fuchsia, size=size.small, text="NW")
+
+alertcondition(bullHit, "No-wick BULLISH streak", "{{exchange}}:{{ticker}} {{interval}} - bullish no-wick streak, close {{close}}")
+alertcondition(bearHit, "No-wick BEARISH streak", "{{exchange}}:{{ticker}} {{interval}} - bearish no-wick streak, close {{close}}")

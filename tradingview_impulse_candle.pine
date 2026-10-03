@@ -17,7 +17,8 @@ bodyPct = rng > 0 ? body / rng * 100 : 0.0
 avgBody = ta.sma(body, avgLen)[1]
 avgVol  = ta.sma(volume, avgLen)[1]
 
-isImpulse = bodyPct >= minBodyPct and not na(avgBody) and body >= mult * avgBody and (not useVol or volume >= volMult * avgVol)
+volOk     = not useVol or na(volume) or volume == 0 or volume >= volMult * avgVol
+isImpulse = bodyPct >= minBodyPct and not na(avgBody) and body >= mult * avgBody and volOk
 bullHit = barstate.isconfirmed and isImpulse and close > open
 bearHit = barstate.isconfirmed and isImpulse and close < open
 

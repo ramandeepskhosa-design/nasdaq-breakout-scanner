@@ -22,6 +22,7 @@ Env: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 """
 import json
 import os
+import subprocess
 import sys
 import time
 import urllib.parse
@@ -248,11 +249,17 @@ if __name__ == "__main__":
         run_cycle(markets, state, "--force" in args, "--dry" in args, only)
         save_state(state)
     else:
+        # Each 15-min check runs in its own short-lived process: yfinance leaks file
+        # handles, so a single long-lived process ends up with "Too many open files"
+        # (this killed the first version). A timeout also stops a hung fetch from
+        # stalling the loop.
         print("Live candle alerts running (Ctrl+C to stop)...")
+        script = os.path.abspath(__file__)
         while True:
             sleep_to_next_bar()
             try:
-                run_cycle(markets, state, "--force" in args, "--dry" in args, only)
-                save_state(state)
+                subprocess.run([sys.executable, "-u", script, "--once", *args], timeout=840)
+            except subprocess.TimeoutExpired:
+                print("cycle timed out after 14 min - killed, continuing with next bar")
             except Exception as e:
                 print("cycle error:", e)

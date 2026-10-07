@@ -22,6 +22,7 @@ Env: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 """
 import json
 import os
+import resource
 import subprocess
 import sys
 import time
@@ -241,7 +242,19 @@ def sleep_to_next_bar():
     time.sleep(max(1, (nxt + timedelta(seconds=60) - now).total_seconds()))
 
 
+def raise_fd_limit(target=10240):
+    """launchd gives agents only 256 open files; yfinance needs far more per cycle."""
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        want = target if hard == resource.RLIM_INFINITY else min(target, hard)
+        if soft < want:
+            resource.setrlimit(resource.RLIMIT_NOFILE, (want, hard))
+    except Exception as e:
+        print("could not raise open-file limit:", e)
+
+
 if __name__ == "__main__":
+    raise_fd_limit()
     args = sys.argv[1:]
     only = next((a.split("=", 1)[1].split(",") for a in args if a.startswith("--only=")), None)
     markets, state = load_markets(), load_state()

@@ -317,6 +317,67 @@ def maybe_report(name, m, now, state, data, dry):
         send("\n".join(summary if k == 0 else [head + " (cont.)"]) + "\n\n" + "\n".join(lines[k:k + 40]), dry)
 
 
+def nifty_change_from_open(now):
+    """NSE only: Nifty's move since today's open at the latest completed 15m candle (None if unavailable)."""
+    try:
+        df = yf.download("^NSEI", period="2d", interval="15m", progress=False, auto_adjust=False)
+        df = completed(flatten(df), now)
+        if df.empty:
+            return None
+        df.index = df.index.tz_convert("Asia/Kolkata")
+        day = df[df.index.strftime("%Y-%m-%d") == df.index[-1].strftime("%Y-%m-%d")]
+        return float((day["Close"].iloc[-1] / day["Open"].iloc[0] - 1) * 100)
+    except Exception:
+        return None
+
+
+def learning_note(kind, direction, bar_ts, nchg):
+    """Nifty context + a star when the alert matches a setup the nightly study has PROVEN."""
+    if nchg is None:
+        return ""
+    s = 1 if direction == "bull" else -1
+    nd = nchg * s
+    note = f"\n    📊 Nifty {nchg:+.2f}% today ({'with you' if nd > 0.1 else 'against you' if nd < -0.1 else 'flat'})"
+    try:
+        card = json.load(open(os.path.join(BASE_DIR, "learning", "scorecard.json")))
+        t = pd.Timestamp(bar_ts)
+        mday = t.hour * 60 + t.minute
+        for r in card.get("proven", []):
+            lo, hi = r["slot_range"]
+            if (r["kind"] in ("ALL", kind) and r["dir"] in ("both", direction) and lo <= mday < hi
+                    and (r["nifty_min"] is None or nd > r["nifty_min"])):
+                note += (f"\n    ⭐ PROVEN setup: {r['kind']}/{r['dir']}/{r['slot']}/{r['nifty']} "
+                         f"({r['n']} trades, {r['win']}% won, {r['ret']:+.2f}%/trade)")
+                break
+    except Exception:
+        pass
+    return note
+
+
+def order_book_note(ticker, direction):
+    """Crypto only: live Binance order-book imbalance within 0.2% of price (free, no key)."""
+    try:
+        sym = ticker.replace("-USD", "USDT")
+        url = f"https://api.binance.com/api/v3/depth?symbol={sym}&limit=100"
+        with urllib.request.urlopen(url, timeout=8) as r:
+            ob = json.load(r)
+        bids = [(float(a), float(b)) for a, b in ob["bids"]]
+        asks = [(float(a), float(b)) for a, b in ob["asks"]]
+        mid = (bids[0][0] + asks[0][0]) / 2
+        bid_v = sum(a * q for a, q in bids if a >= mid * 0.998)
+        ask_v = sum(a * q for a, q in asks if a <= mid * 1.002)
+        tot = bid_v + ask_v
+        if tot <= 0:
+            return ""
+        bid_pct = bid_v / tot * 100
+        spread = (asks[0][0] - bids[0][0]) / mid * 100
+        agrees = (bid_pct >= 55) if direction == "bull" else (bid_pct <= 45)
+        mark = "✅ supports" if agrees else ("⚠️ against" if abs(bid_pct - 50) >= 5 else "neutral")
+        return f"\n    📖 book: bids {bid_pct:.0f}% / asks {100 - bid_pct:.0f}% within 0.2%, spread {spread:.3f}% ({mark})"
+    except Exception:
+        return ""
+
+
 def run_cycle(markets, state, force, dry, only):
     now = datetime.now(timezone.utc)
     for name, m in markets.items():
@@ -346,6 +407,7 @@ def run_cycle(markets, state, force, dry, only):
 
         # Stage 2: only candidates get the long history needed for EMA5..EMA200
         lines, sent, dropped = [], [], 0
+        nchg = nifty_change_from_open(now) if (pending and name == "NSE") else None
         if pending:
             long_data = fetch(sorted({p["t"] for p in pending}),
                               period="10d" if name == "CRYPTO" else "30d")
@@ -357,12 +419,15 @@ def run_cycle(markets, state, force, dry, only):
                     dropped += 1
                     continue
                 sym = CRYPTO.get(p["t"], p["t"].replace(".NS", ""))
+                book = order_book_note(p["t"], p["dir"]) if name == "CRYPTO" else ""
+                if name == "NSE":
+                    book = learning_note(p["kind"], p["dir"], p["bar"], nchg)
                 icon = "🟢" if p["dir"] == "bull" else "🔴"
                 if p["kind"] == "EXTREME":
                     action = "SHORT setup" if p["dir"] == "bear" else "LONG setup"
-                    lines.append(f"{icon} <b>{sym}</b> {m['cur']}{p['px']:,.2f}  {kind_label('EXTREME', p['dir'])} - {action} - {p['detail']}")
+                    lines.append(f"{icon} <b>{sym}</b> {m['cur']}{p['px']:,.2f}  {kind_label('EXTREME', p['dir'])} - {action} - {p['detail']}{book}")
                 else:
-                    lines.append(f"{icon} <b>{sym}</b> {m['cur']}{p['px']:,.2f}  {kind_label(p['kind'], p['dir'])} {p['dir'].upper()} - {p['detail']}")
+                    lines.append(f"{icon} <b>{sym}</b> {m['cur']}{p['px']:,.2f}  {kind_label(p['kind'], p['dir'])} {p['dir'].upper()} - {p['detail']}{book}")
                 sent.append({"ts": now.isoformat(), "market": name, "date": p["date"], "bar": p["bar"],
                              "t": p["t"], "sym": sym, "kind": p["kind"], "dir": p["dir"], "px": p["px"]})
         print(f"[{datetime.now().strftime('%H:%M:%S')}] {name}: {len(data)} fetched, "
@@ -379,9 +444,15 @@ def run_cycle(markets, state, force, dry, only):
 
 
 def sleep_to_next_bar():
+    """Wait for the next 15-min boundary (+60 s) using the wall clock.
+
+    time.sleep() does not count time the Mac spends asleep, so a single long sleep
+    overshoots after a wake-up; polling the real clock every 5 s fixes that."""
     now = datetime.now(timezone.utc)
     nxt = now.replace(second=0, microsecond=0) + timedelta(minutes=15 - now.minute % 15)
-    time.sleep(max(1, (nxt + timedelta(seconds=60) - now).total_seconds()))
+    target = nxt + timedelta(seconds=60)
+    while datetime.now(timezone.utc) < target:
+        time.sleep(5)
 
 
 def raise_fd_limit(target=10240):

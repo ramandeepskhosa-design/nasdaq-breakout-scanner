@@ -309,9 +309,17 @@ def main():
     lines = build_report(store, sc, card, new_rows)
     text = "\n".join(lines)
     print(text)
-    if "--no-send" not in sys.argv and not dry:
-        for k in range(0, len(lines), 40):
-            L.send("\n".join(lines[k:k + 40]), False)
+    marker = os.path.join(OUT_DIR, "last_sent.txt")
+    last_sent = open(marker).read().strip() if os.path.exists(marker) else ""
+    day = store.date.max()
+    if "--no-send" in sys.argv or dry:
+        return
+    if last_sent == day and "--force" not in sys.argv:
+        print(f"report for {day} already sent - skipping")      # the 15:45 run and the later backups share this marker
+        return
+    for k in range(0, len(lines), 40):
+        L.send("\n".join(lines[k:k + 40]), False)
+    open(marker, "w").write(day)      # only after every part was sent
 
 
 if __name__ == "__main__":

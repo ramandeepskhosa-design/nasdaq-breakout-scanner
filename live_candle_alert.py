@@ -264,57 +264,78 @@ def kind_label(kind, d):
     return "IMPULSE" if kind == "IMPULSE" else "NO-WICK"
 
 
+def day_close_prices(m, tickers, day, now):
+    """Last completed close per ticker on local date `day` (7 days of 15m history)."""
+    tz = ZoneInfo(m["tz"])
+    out = {}
+    for t, df in fetch(sorted(tickers), period="7d").items():
+        b = completed(df, now)
+        if b.empty:
+            continue
+        idx = b.index.tz_convert(tz) if b.index.tz is not None else b.index.tz_localize("UTC").tz_convert(tz)
+        sel = b[idx.strftime("%Y-%m-%d") == day]
+        if len(sel):
+            out[t] = float(sel["Close"].iloc[-1])
+    return out
+
+
 def maybe_report(name, m, now, state, data, dry):
-    """Once per day, right after the market closes: every signal fired today and how it did."""
+    """Daily signal report per market after its close - with catch-up.
+
+    Looks at today and the 3 previous days; any day that has signals (or is today) and whose
+    report was never sent goes out at the next cycle after the Mac wakes, marked as late."""
     ra = m.get("report_after")
     if not ra:
         return
     local = now.astimezone(ZoneInfo(m["tz"]))
-    if m["hours"] is not None and local.weekday() >= 5:
-        return
-    if (local.hour, local.minute) < ra:
-        return
-    day = local.strftime("%Y-%m-%d")
-    key = f"REPORT|{name}|{day}"
-    if key in state:
-        return
-    state[key] = now.isoformat()
-    entries = sorted(read_log(name, day), key=lambda e: e["bar"])
-    last_px = {}
-    for t, df in data.items():
-        b = completed(df, now)
-        if len(b):
-            last_px[t] = float(b["Close"].iloc[-1])
-    rows = []
-    for e in entries:
-        lp = last_px.get(e["t"])
-        mv = None
-        if lp and e["px"]:
-            mv = (lp - e["px"]) / e["px"] * 100
-            if e["dir"] == "bear":
-                mv = -mv
-        rows.append((e, lp, mv))
-    head = f"<b>📋 Daily signal report - {name} - {day}</b>"
-    if not rows:
-        send(head + "\nNo signals fired today.", dry)
-        return
-    kinds = {}
-    for e, _, _ in rows:
-        kinds[kind_label(e["kind"], e["dir"])] = kinds.get(kind_label(e["kind"], e["dir"]), 0) + 1
-    moves = [mv for _, _, mv in rows if mv is not None]
-    summary = [head, f"{len(rows)} signals: " + ", ".join(f"{v} {k}" for k, v in sorted(kinds.items()))]
-    if moves:
-        win = sum(1 for x in moves if x > 0)
-        summary.append(f"Moved the signal's way by the close: {win}/{len(moves)} ({win / len(moves) * 100:.0f}%), "
-                       f"average {sum(moves) / len(moves):+.2f}%")
-    lines = []
-    for e, lp, mv in rows:
-        icon = "🟢" if e["dir"] == "bull" else "🔴"
-        tm = e["bar"][11:16]
-        tail = f"→ {m['cur']}{lp:,.2f} ({mv:+.2f}%) {'✅' if mv > 0 else '❌'}" if mv is not None else ""
-        lines.append(f"{icon} {tm} <b>{e['sym']}</b> {m['cur']}{e['px']:,.2f} {kind_label(e['kind'], e['dir'])} {tail}")
-    for k in range(0, len(lines), 40):
-        send("\n".join(summary if k == 0 else [head + " (cont.)"]) + "\n\n" + "\n".join(lines[k:k + 40]), dry)
+    for back in range(3, -1, -1):
+        d = local - timedelta(days=back)
+        if m["hours"] is not None and d.weekday() >= 5:
+            continue
+        if back == 0 and (local.hour, local.minute) < ra:
+            continue
+        day = d.strftime("%Y-%m-%d")
+        key = f"REPORT|{name}|{day}"
+        if key in state:
+            continue
+        entries = sorted(read_log(name, day), key=lambda e: e["bar"])
+        if not entries and back > 0:
+            continue
+        due = d.replace(hour=ra[0], minute=ra[1], second=0, microsecond=0)
+        late = (local - due) > timedelta(minutes=45)
+        head = f"<b>📋 Daily signal report - {name} - {day}</b>" + (" <i>(late - sent after the Mac woke up)</i>" if late else "")
+        if not entries:
+            send(head + "\nNo signals fired today.", dry)
+            state[key] = now.isoformat()
+            continue
+        last_px = day_close_prices(m, {e["t"] for e in entries}, day, now)
+        rows = []
+        for e in entries:
+            lp = last_px.get(e["t"])
+            mv = None
+            if lp and e["px"]:
+                mv = (lp - e["px"]) / e["px"] * 100
+                if e["dir"] == "bear":
+                    mv = -mv
+            rows.append((e, lp, mv))
+        kinds = {}
+        for e, _, _ in rows:
+            kinds[kind_label(e["kind"], e["dir"])] = kinds.get(kind_label(e["kind"], e["dir"]), 0) + 1
+        moves = [mv for _, _, mv in rows if mv is not None]
+        summary = [head, f"{len(rows)} signals: " + ", ".join(f"{v} {k}" for k, v in sorted(kinds.items()))]
+        if moves:
+            win = sum(1 for x in moves if x > 0)
+            summary.append(f"Moved the signal's way by the close: {win}/{len(moves)} ({win / len(moves) * 100:.0f}%), "
+                           f"average {sum(moves) / len(moves):+.2f}%")
+        lines = []
+        for e, lp, mv in rows:
+            icon = "🟢" if e["dir"] == "bull" else "🔴"
+            tm = e["bar"][11:16]
+            tail = f"→ {m['cur']}{lp:,.2f} ({mv:+.2f}%) {'✅' if mv > 0 else '❌'}" if mv is not None else ""
+            lines.append(f"{icon} {tm} <b>{e['sym']}</b> {m['cur']}{e['px']:,.2f} {kind_label(e['kind'], e['dir'])} {tail}")
+        for k in range(0, len(lines), 40):
+            send("\n".join(summary if k == 0 else [head + " (cont.)"]) + "\n\n" + "\n".join(lines[k:k + 40]), dry)
+        state[key] = now.isoformat()      # only after every part was sent
 
 
 def nifty_change_from_open(now):
@@ -384,6 +405,8 @@ def run_cycle(markets, state, force, dry, only):
         if only and name not in only:
             continue
         if not force and not is_open(m, now):
+            if not dry:
+                maybe_report(name, m, now, state, None, dry)   # closed market: still catch up on unsent reports
             continue
         t0 = time.time()
         data = fetch(m["tickers"])

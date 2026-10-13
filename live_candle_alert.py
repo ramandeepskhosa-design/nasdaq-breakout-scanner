@@ -46,6 +46,8 @@ NW_MAX_WICK      = 20.0
 NW_STREAK        = 3
 # "Near day low/high" alert: price sits at the day's extreme after small-closing-wick candles.
 EXT_NEAR_PCT      = 0.30   # close within this % (of price) of the day's low (short) / high (long)
+INDEX_NAMES = {"^NSEI": "NIFTY 50", "^NSEBANK": "BANK NIFTY"}
+INDEX_VOLUME_PROXY = {"^NSEI": "NIFTYBEES.NS", "^NSEBANK": "BANKBEES.NS"}   # Yahoo gives zero volume for the index itself
 EXT_MIN_RANGE_PCT = 0.80   # day range so far >= this % of price, else everything is "near" an extreme
 EXT_MIN_BARS      = 4      # need ~an hour of session before day low/high means anything
 EXT_WICK_2        = 20.0   # path A: last 2 same-direction candles, closing-side wick <= this %
@@ -66,6 +68,8 @@ def load_markets():
     return {
         "NSE":    {"tickers": [f"{s}.NS" for s in nse], "tz": "Asia/Kolkata",
                    "hours": ((9, 15), (15, 35)), "last_bar": (15, 15), "report_after": (15, 31), "cur": "₹"},
+        "INDEX":  {"tickers": list(INDEX_NAMES), "tz": "Asia/Kolkata", "ext_min_range": 0.35, "need_ema": False,
+                   "hours": ((9, 15), (15, 35)), "last_bar": (15, 15), "report_after": (15, 31), "cur": ""},
         "US":     {"tickers": uni, "tz": "America/New_York",
                    "hours": ((9, 30), (16, 5)), "last_bar": (15, 45), "report_after": (16, 1), "cur": "$"},
         "CRYPTO": {"tickers": list(CRYPTO), "tz": "UTC", "hours": None, "report_after": (23, 46), "cur": "$"},
@@ -197,7 +201,7 @@ def evaluate(bars):
     return hits
 
 
-def evaluate_extreme(bars, tz):
+def evaluate_extreme(bars, tz, min_range=EXT_MIN_RANGE_PCT):
     """Near the day's LOW (short setup) or HIGH (long setup) after small-closing-wick candles.
     Path A: last 2 candles same direction, each with closing-side wick <= EXT_WICK_2.
     Path B: the last candle alone is strong: closing wick <= EXT_WICK_1 and body >= EXT_BODY_1."""
@@ -209,7 +213,7 @@ def evaluate_extreme(bars, tz):
     o, h, l, c = (day[k].values.astype(float) for k in ("Open", "High", "Low", "Close"))
     px = c[-1]
     day_hi, day_lo = h.max(), l.min()
-    if px <= 0 or (day_hi - day_lo) / px * 100 < EXT_MIN_RANGE_PCT:
+    if px <= 0 or (day_hi - day_lo) / px * 100 < min_range:
         return []
 
     def candle(i):
@@ -364,6 +368,38 @@ def maybe_report(name, m, now, state, data, dry):
         state[key] = now.isoformat()      # only after every part was sent
 
 
+def slot_volume_ratio(df, bar_ts, tz="Asia/Kolkata"):
+    """Volume of the candle starting at bar_ts vs the average of the same 15-min slot over the previous 10 sessions."""
+    try:
+        v = df["Volume"].copy()
+        v.index = v.index.tz_convert(tz) if v.index.tz is not None else v.index.tz_localize("UTC").tz_convert(tz)
+        t = pd.Timestamp(bar_ts).tz_convert(tz)
+        slot = v[(v.index.hour == t.hour) & (v.index.minute == t.minute)]
+        cur = slot.get(t)
+        prev = slot[slot.index.date < t.date()].tail(10)
+        prev = prev[prev > 0]
+        if cur is None or cur <= 0 or len(prev) < 3:
+            return None
+        return float(cur / prev.mean())
+    except Exception:
+        return None
+
+
+def volume_note(ratio, proxy=""):
+    if ratio is None:
+        return ""
+    tag = "🔥" if ratio >= 2 else ("" if ratio >= 0.7 else "💤")
+    return f"\n    📦 volume{proxy} {ratio:.1f}x normal for this time {tag}".rstrip()
+
+
+def index_volume_note(ticker, bar_ts):
+    etf = INDEX_VOLUME_PROXY.get(ticker)
+    if not etf:
+        return ""
+    df = fetch([etf], period="15d").get(etf)
+    return volume_note(slot_volume_ratio(df, bar_ts), " (ETF proxy)") if df is not None else ""
+
+
 def nifty_change_from_open(now):
     """NSE only: Nifty's move since today's open at the latest completed 15m candle (None if unavailable)."""
     try:
@@ -446,7 +482,7 @@ def run_cycle(markets, state, force, dry, only):
             if m.get("last_bar") and (local_bar.hour, local_bar.minute) == m["last_bar"]:
                 continue   # closing-drift candle: full body on thin volume, mostly noise
             day_local = local_bar.strftime("%Y-%m-%d")
-            for kind, d, detail in evaluate(bars) + evaluate_extreme(bars, m["tz"]):
+            for kind, d, detail in evaluate(bars) + evaluate_extreme(bars, m["tz"], m.get("ext_min_range", EXT_MIN_RANGE_PCT)):
                 key = f"{t}|{day_local}|EXTREME|{d}" if kind == "EXTREME" else f"{t}|{ts}|{kind}"
                 if key in state:
                     continue
@@ -461,16 +497,20 @@ def run_cycle(markets, state, force, dry, only):
             long_data = fetch(sorted({p["t"] for p in pending}),
                               period="10d" if name == "CRYPTO" else "30d")
             for p in pending:
-                need_ema = not (p["kind"] == "EXTREME" and not EXT_REQUIRE_EMA)
+                need_ema = m.get("need_ema", True) and not (p["kind"] == "EXTREME" and not EXT_REQUIRE_EMA)
                 ldf = long_data.get(p["t"])
                 closes = completed(ldf, now)["Close"] if ldf is not None else None
                 if need_ema and (closes is None or not ema_aligned(closes, p["dir"])):
                     dropped += 1
                     continue
-                sym = CRYPTO.get(p["t"], p["t"].replace(".NS", ""))
+                sym = {**CRYPTO, **INDEX_NAMES}.get(p["t"], p["t"].replace(".NS", ""))
                 book = order_book_note(p["t"], p["dir"]) if name == "CRYPTO" else ""
                 if name == "NSE":
-                    book = learning_note(p["kind"], p["dir"], p["bar"], nchg)
+                    book = learning_note(p["kind"], p["dir"], p["bar"], nchg) + volume_note(slot_volume_ratio(ldf, p["bar"]) if ldf is not None else None)
+                elif name == "INDEX":
+                    ok = closes is not None and ema_aligned(closes, p["dir"])
+                    book = (f"\n    📈 EMA 5-200 stack: {'✅ aligned' if ok else '⚠️ not fully aligned'} (shown anyway for indices)"
+                            + index_volume_note(p["t"], p["bar"]))
                 icon = "🟢" if p["dir"] == "bull" else "🔴"
                 if p["kind"] == "EXTREME":
                     action = "SHORT setup" if p["dir"] == "bear" else "LONG setup"

@@ -112,6 +112,32 @@ def fetch(tickers, chunk=50, period="2d"):
             except Exception:
                 continue
         time.sleep(1)
+    # Yahoo rate-limits (HTTP 429) in bursts and then returns nothing for whole chunks. A few
+    # genuinely delisted symbols are normal, but a large gap means an outage: back off and retry
+    # the missing ones slowly (single-threaded) instead of skipping the whole 15-min candle.
+    missing = [t for t in tickers if t not in out]
+    for attempt in range(1, 4):
+        if len(missing) <= max(5, len(tickers) // 10):
+            break
+        print(f"  fetch gap: {len(missing)}/{len(tickers)} missing - retry {attempt} after {20 * attempt}s")
+        time.sleep(20 * attempt)
+        for i in range(0, len(missing), 25):
+            part = missing[i:i + 25]
+            try:
+                df = yf.download(part, period=period, interval="15m", group_by="ticker",
+                                 threads=False, progress=False, auto_adjust=False)
+            except Exception:
+                continue
+            for t in part:
+                try:
+                    sub = df if len(part) == 1 else df[t]
+                    sub = flatten(sub).dropna(how="all")
+                    if not sub.empty:
+                        out[t] = sub
+                except Exception:
+                    continue
+            time.sleep(2)
+        missing = [t for t in tickers if t not in out]
     return out
 
 

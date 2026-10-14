@@ -100,7 +100,7 @@ def build_rows(data, nifty, only_dates):
         for pos in range(60, n - 1):
             day = dates[pos]
             ts = df.index[pos]
-            if (ts.hour, ts.minute) == (15, 15) or daypos[pos] + 1 >= daylen[pos]:
+            if (ts.hour, ts.minute) in ((9, 15), (15, 15)) or daypos[pos] + 1 >= daylen[pos]:
                 continue
             if day not in only_dates:
                 continue

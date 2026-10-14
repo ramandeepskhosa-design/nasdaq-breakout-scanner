@@ -71,11 +71,11 @@ def load_markets():
     nse = list(dict.fromkeys(idx["nifty50"] + idx["nifty_next50"] + idx["midcap50"]))
     return {
         "NSE":    {"tickers": [f"{s}.NS" for s in nse], "tz": "Asia/Kolkata",
-                   "hours": ((9, 15), (15, 35)), "last_bar": (15, 15), "report_after": (15, 31), "cur": "₹"},
+                   "hours": ((9, 15), (15, 35)), "first_bar": (9, 15), "last_bar": (15, 15), "report_after": (15, 31), "cur": "₹"},
         "INDEX":  {"tickers": list(INDEX_NAMES), "tz": "Asia/Kolkata", "ext_min_range": 0.35, "need_ema": False,
-                   "hours": ((9, 15), (15, 35)), "last_bar": (15, 15), "report_after": (15, 31), "cur": ""},
+                   "hours": ((9, 15), (15, 35)), "first_bar": (9, 15), "last_bar": (15, 15), "report_after": (15, 31), "cur": ""},
         "US":     {"tickers": uni, "tz": "America/New_York",
-                   "hours": ((9, 30), (16, 5)), "last_bar": (15, 45), "report_after": (16, 1), "cur": "$"},
+                   "hours": ((9, 30), (16, 5)), "first_bar": (9, 30), "last_bar": (15, 45), "report_after": (16, 1), "cur": "$"},
         "CRYPTO": {"tickers": list(CRYPTO), "tz": "UTC", "hours": None, "report_after": (23, 46), "cur": "$"},
     }
 
@@ -485,6 +485,8 @@ def run_cycle(markets, state, force, dry, only):
                 continue
             ts = str(bars.index[-1])
             local_bar = bars.index[-1].astimezone(ZoneInfo(m["tz"]))
+            if m.get("first_bar") and (local_bar.hour, local_bar.minute) == m["first_bar"]:
+                continue   # opening candle: gap/auction noise, never alerted
             if m.get("last_bar") and (local_bar.hour, local_bar.minute) == m["last_bar"]:
                 continue   # closing-drift candle: full body on thin volume, mostly noise
             day_local = local_bar.strftime("%Y-%m-%d")

@@ -141,7 +141,7 @@ def build_rows(data, nifty, only_dates):
                     n_chg_dir=round(float(r.nchg) * s, 3) if pd.notna(r.nchg) else np.nan,
                     chg_open_dir=round(r.chg_open * s, 3), rsi_dir=round(r.rsi if s == 1 else 100 - r.rsi, 1),
                     vol_ratio=round(float(r.vol_ratio), 2) if pd.notna(r.vol_ratio) else np.nan,
-                    aligned=int(r.bull_al if s == 1 else r.bear_al),
+                    aligned=int(r.bull_al or r.bear_al),
                     entry=round(float(e), 2), ret_eod=round(eod - COST, 4), r_mult=round(res, 3)))
     out = pd.DataFrame(rows)
     if len(out):
@@ -257,7 +257,7 @@ def fmt_setup(r):
 def build_report(store, sc, card, new_rows):
     last = store.date.max()
     day_all = store[store.date == last]
-    td = day_all[day_all.aligned == 1]          # what the live service actually alerts (EMA-aligned only)
+    td = day_all[(day_all.aligned == 1) & day_all.kind.isin(L.ALERT_KINDS)]   # what the live service actually alerts
     lines = [f"🧠 <b>Daily learning - NSE - {last}</b>",
              f"Memory: {len(store):,} signals over {store.date.nunique()} days "
              f"(+{new_rows} newly learned)", ""]

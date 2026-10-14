@@ -47,7 +47,8 @@ NW_STREAK        = 3
 # "Near day low/high" alert: price sits at the day's extreme after small-closing-wick candles.
 EXT_NEAR_PCT      = 0.30   # close within this % (of price) of the day's low (short) / high (long)
 EMA_ORDER_PERIODS = (50, 100, 200)   # only these three must be in strict order (rising or falling)
-ALERT_KINDS = {"EXTREME", "NOWICK"}   # IMPULSE (big full-body candle) alerts are switched off
+ALERT_KINDS = {"EXTREME"}   # ONLY the single-candle near-day-low/high alert; impulse and no-wick streak alerts are off
+EXT_ALLOW_TWO = False       # two-candle path switched off: a single strong candle (wick <= EXT_WICK_1) is required
 EXT_COOLDOWN_MIN = 60     # a stock can re-alert NEAR DAY LOW/HIGH (same direction) after this many minutes
 INDEX_NAMES = {"^NSEI": "NIFTY 50", "^NSEBANK": "BANK NIFTY"}
 INDEX_VOLUME_PROXY = {"^NSEI": "NIFTYBEES.NS", "^NSEBANK": "BANKBEES.NS"}   # Yahoo gives zero volume for the index itself
@@ -237,7 +238,7 @@ def evaluate_extreme(bars, tz, min_range=EXT_MIN_RANGE_PCT):
     if dist > EXT_NEAR_PCT:
         return []
     prev = candle(-2)
-    two = prev is not None and prev[0] == d and prev[1] <= EXT_WICK_2 and wick <= EXT_WICK_2
+    two = EXT_ALLOW_TWO and prev is not None and prev[0] == d and prev[1] <= EXT_WICK_2 and wick <= EXT_WICK_2
     one = wick <= EXT_WICK_1 and body >= EXT_BODY_1
     if not (two or one):
         return []

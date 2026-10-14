@@ -56,6 +56,7 @@ EXT_MIN_RANGE_PCT = 0.80   # day range so far >= this % of price, else everythin
 EXT_MIN_BARS      = 2      # opening candle (09:15) + the signal candle (09:30 onwards): the first 15 minutes set the opening range
 EXT_WICK_2        = 20.0   # path A: last 2 same-direction candles, closing-side wick <= this %
 EXT_WICK_1        = 15.0   # path B: ONE strong candle, closing-side wick <= this % ...
+EXT_WICK_OTHER    = 15.0   #         ... AND the opposite-side wick <= this % (a short candle must not have gone up from its open, a long must not have gone below it)
 EXT_BODY_1        = 70.0   #         ... and body >= this % of its range
 EXT_REQUIRE_EMA   = True   # also demand the 5/10/20/50/100/200 EMA stack (set False to drop it)
 EMA_PERIODS      = (5, 10, 20, 50, 100, 200)
@@ -228,23 +229,24 @@ def evaluate_extreme(bars, tz, min_range=EXT_MIN_RANGE_PCT):
             return None
         red = c[i] < o[i]
         wick = ((c[i] - l[i]) if red else (h[i] - c[i])) / r * 100
-        return ("bear" if red else "bull"), wick, abs(c[i] - o[i]) / r * 100
+        body = abs(c[i] - o[i]) / r * 100
+        return ("bear" if red else "bull"), wick, body, 100.0 - wick - body
 
     last = candle(-1)
     if last is None:
         return []
-    d, wick, body = last
+    d, wick, body, other = last
     dist = (px - day_lo) / px * 100 if d == "bear" else (day_hi - px) / px * 100
     if dist > EXT_NEAR_PCT:
         return []
     prev = candle(-2)
     two = EXT_ALLOW_TWO and prev is not None and prev[0] == d and prev[1] <= EXT_WICK_2 and wick <= EXT_WICK_2
-    one = wick <= EXT_WICK_1 and body >= EXT_BODY_1
+    one = wick <= EXT_WICK_1 and other <= EXT_WICK_OTHER and body >= EXT_BODY_1
     if not (two or one):
         return []
     colour = "red" if d == "bear" else "green"
     side = "low" if d == "bear" else "high"
-    return [("EXTREME", d, f"{2 if two else 1} {colour} candle(s), closing wick {wick:.0f}%, "
+    return [("EXTREME", d, f"{2 if two else 1} {colour} candle(s), closing wick {wick:.0f}%, other wick {other:.0f}%, "
                            f"{dist:.2f}% from day {side}")]
 
 

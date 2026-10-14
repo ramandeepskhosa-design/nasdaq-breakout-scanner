@@ -82,8 +82,8 @@ def build_rows(data, nifty, only_dates):
         df["rsi"] = rsi(c)
         for p in L.EMA_PERIODS:
             df[f"e{p}"] = c.ewm(span=p, adjust=False).mean()
-        df["bull_al"] = ((df.e5 > df.e10) & (df.e10 > df.e20) & (df.e20 > df.e50) & (df.e50 > df.e100) & (df.e100 > df.e200)).astype(int)
-        df["bear_al"] = ((df.e5 < df.e10) & (df.e10 < df.e20) & (df.e20 < df.e50) & (df.e50 < df.e100) & (df.e100 < df.e200)).astype(int)
+        df["bull_al"] = ((df.e50 > df.e100) & (df.e100 > df.e200)).astype(int)     # rising 50>100>200
+        df["bear_al"] = ((df.e50 < df.e100) & (df.e100 < df.e200)).astype(int)     # falling 50<100<200
         tp = (df.High + df.Low + df.Close) / 3
         vol = df.Volume.replace(0, np.nan)
         df["vwap"] = (tp * vol).groupby(df.date).cumsum() / vol.groupby(df.date).cumsum()
@@ -250,7 +250,7 @@ def fmt_setup(r):
     if r["nifty"] != "any":
         bits.append(r["nifty"])
     if r["aligned"]:
-        bits.append("EMA-aligned")
+        bits.append("EMA 50/100/200 ordered")
     return " / ".join(bits)
 
 

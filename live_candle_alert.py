@@ -46,6 +46,7 @@ NW_MAX_WICK      = 20.0
 NW_STREAK        = 3
 # "Near day low/high" alert: price sits at the day's extreme after small-closing-wick candles.
 EXT_NEAR_PCT      = 0.30   # close within this % (of price) of the day's low (short) / high (long)
+EMA_ORDER_PERIODS = (50, 100, 200)   # only these three must be in strict order (rising or falling)
 ALERT_KINDS = {"EXTREME", "NOWICK"}   # IMPULSE (big full-body candle) alerts are switched off
 EXT_COOLDOWN_MIN = 60     # a stock can re-alert NEAR DAY LOW/HIGH (same direction) after this many minutes
 INDEX_NAMES = {"^NSEI": "NIFTY 50", "^NSEBANK": "BANK NIFTY"}
@@ -148,13 +149,13 @@ def fetch(tickers, chunk=50, period="2d"):
 
 
 def ema_aligned(closes, direction=None):
-    """True when EMA 5,10,20,50,100,200 (15m) are in a clean strict order - either rising
-    (5>10>20>50>100>200) or falling (5<10<20<50<100<200). The order is required, the
-    direction is not: it applies to bullish and bearish signals alike (`direction` is kept
-    only so older callers still work). Evaluated at the last completed candle."""
+    """True when EMA 50, 100 and 200 (15m) are in a clean strict order - either rising
+    (50>100>200) or falling (50<100<200). The order is required, the direction is not: it
+    applies to bullish and bearish signals alike (`direction` is kept only so older callers
+    still work). Evaluated at the last completed candle."""
     if len(closes) < EMA_MIN_BARS:
         return False
-    e = [closes.ewm(span=p, adjust=False).mean().iloc[-1] for p in EMA_PERIODS]
+    e = [closes.ewm(span=p, adjust=False).mean().iloc[-1] for p in EMA_ORDER_PERIODS]
     rising = all(e[i] > e[i + 1] for i in range(len(e) - 1))
     falling = all(e[i] < e[i + 1] for i in range(len(e) - 1))
     return rising or falling
@@ -537,7 +538,7 @@ def run_cycle(markets, state, force, dry, only):
               f"{len(lines)} alerts, {time.time() - t0:.0f}s")
         if lines:
             for k in range(0, len(lines), 40):
-                head = f"<b>🕯️ Live candle alert - {name} (15m, EMA 5/10/20/50/100/200 in clean order)</b>\n"
+                head = f"<b>🕯️ Live candle alert - {name} (15m, EMA 50/100/200 in clean order)</b>\n"
                 send(head + "\n".join(lines[k:k + 40]), dry)
             if not dry:
                 append_log(sent)

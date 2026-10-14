@@ -46,6 +46,7 @@ NW_MAX_WICK      = 20.0
 NW_STREAK        = 3
 # "Near day low/high" alert: price sits at the day's extreme after small-closing-wick candles.
 EXT_NEAR_PCT      = 0.30   # close within this % (of price) of the day's low (short) / high (long)
+EXT_COOLDOWN_MIN = 60     # a stock can re-alert NEAR DAY LOW/HIGH (same direction) after this many minutes
 INDEX_NAMES = {"^NSEI": "NIFTY 50", "^NSEBANK": "BANK NIFTY"}
 INDEX_VOLUME_PROXY = {"^NSEI": "NIFTYBEES.NS", "^NSEBANK": "BANKBEES.NS"}   # Yahoo gives zero volume for the index itself
 EXT_MIN_RANGE_PCT = 0.80   # day range so far >= this % of price, else everything is "near" an extreme
@@ -485,7 +486,14 @@ def run_cycle(markets, state, force, dry, only):
             for kind, d, detail in evaluate(bars) + evaluate_extreme(bars, m["tz"], m.get("ext_min_range", EXT_MIN_RANGE_PCT)):
                 key = f"{t}|{day_local}|EXTREME|{d}" if kind == "EXTREME" else f"{t}|{ts}|{kind}"
                 if key in state:
-                    continue
+                    if kind != "EXTREME":
+                        continue
+                    try:
+                        age = (now - datetime.fromisoformat(state[key])).total_seconds()
+                    except Exception:
+                        age = 0
+                    if age < EXT_COOLDOWN_MIN * 60:
+                        continue       # same stock/direction alerted less than an hour ago
                 state[key] = now.isoformat()
                 pending.append({"t": t, "kind": kind, "dir": d, "detail": detail,
                                 "px": float(bars["Close"].iloc[-1]), "bar": ts, "date": day_local})

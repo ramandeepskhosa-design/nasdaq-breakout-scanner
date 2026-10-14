@@ -96,7 +96,7 @@ def build_rows(data, nifty, only_dates):
         daylen = g.Close.transform("count").values
         O, H, Lw, C = df.Open.values, df.High.values, df.Low.values, df.Close.values
         dates = df.date.values
-        fired = set()
+        fired = {}
         for pos in range(60, n - 1):
             day = dates[pos]
             ts = df.index[pos]
@@ -106,10 +106,10 @@ def build_rows(data, nifty, only_dates):
                 continue
             bars = df.iloc[max(0, pos - 80):pos + 1][["Open", "High", "Low", "Close", "Volume"]]
             for kind, d, _ in L.evaluate(bars) + L.evaluate_extreme(bars, TZ):
-                if kind == "EXTREME":
-                    if (day, d) in fired:
+                if kind == "EXTREME":          # same cool-down as the live service (60 min = 4 candles)
+                    if pos - fired.get((day, d), -99) < 4:
                         continue
-                    fired.add((day, d))
+                    fired[(day, d)] = pos
                 s = 1 if d == "bull" else -1
                 r = df.iloc[pos]
                 rng = r.High - r.Low

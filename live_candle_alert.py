@@ -55,9 +55,9 @@ INDEX_VOLUME_PROXY = {"^NSEI": "NIFTYBEES.NS", "^NSEBANK": "BANKBEES.NS"}   # Ya
 EXT_MIN_RANGE_PCT = 0.80   # day range so far >= this % of price, else everything is "near" an extreme
 EXT_MIN_BARS      = 2      # opening candle (09:15) + the signal candle (09:30 onwards): the first 15 minutes set the opening range
 EXT_WICK_2        = 20.0   # path A: last 2 same-direction candles, closing-side wick <= this %
-EXT_WICK_1        = 15.0   # path B: ONE strong candle, closing-side wick <= this % ...
-EXT_WICK_OTHER    = 15.0   #         ... AND the opposite-side wick <= this % (a short candle must not have gone up from its open, a long must not have gone below it)
-EXT_BODY_1        = 70.0   #         ... and body >= this % of its range
+EXT_WICK_1        = 10.0   # path B: ONE strong candle, closing-side wick <= this % ...
+EXT_WICK_OTHER    = 10.0   #         ... AND the opposite-side wick <= this % (a short candle must not have gone up from its open, a long must not have gone below it)
+EXT_BODY_1        = 80.0   #         ... and body >= this % of its range
 EXT_REQUIRE_EMA   = True   # also demand the 5/10/20/50/100/200 EMA stack (set False to drop it)
 EMA_PERIODS      = (5, 10, 20, 50, 100, 200)
 EMA_MIN_BARS     = 250   # EMA200 needs a long warm-up to be meaningful

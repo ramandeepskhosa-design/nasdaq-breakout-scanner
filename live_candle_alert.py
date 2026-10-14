@@ -53,7 +53,7 @@ EXT_COOLDOWN_MIN = 60     # a stock can re-alert NEAR DAY LOW/HIGH (same directi
 INDEX_NAMES = {"^NSEI": "NIFTY 50", "^NSEBANK": "BANK NIFTY"}
 INDEX_VOLUME_PROXY = {"^NSEI": "NIFTYBEES.NS", "^NSEBANK": "BANKBEES.NS"}   # Yahoo gives zero volume for the index itself
 EXT_MIN_RANGE_PCT = 0.80   # day range so far >= this % of price, else everything is "near" an extreme
-EXT_MIN_BARS      = 4      # need ~an hour of session before day low/high means anything
+EXT_MIN_BARS      = 2      # opening candle (09:15) + the signal candle (09:30 onwards): the first 15 minutes set the opening range
 EXT_WICK_2        = 20.0   # path A: last 2 same-direction candles, closing-side wick <= this %
 EXT_WICK_1        = 15.0   # path B: ONE strong candle, closing-side wick <= this % ...
 EXT_BODY_1        = 70.0   #         ... and body >= this % of its range

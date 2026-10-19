@@ -97,7 +97,8 @@ def fo_symbols():
 def load_markets():
     uni = json.load(open(os.path.join(BASE_DIR, "universe.json")))["universe"]
     idx = json.load(open(os.path.join(BASE_DIR, "nse_index_stocks.json")))
-    nse = list(dict.fromkeys(idx["nifty50"] + idx["nifty_next50"] + idx["midcap50"] + fo_symbols()))
+    dead = {"TATAMOTORS", "LTIM", "ZOMATO", "MCDOWELL-N"}        # renamed/demerged: ETERNAL, LTM, TMPV, UNITDSPR are in the F&O list
+    nse = [x for x in dict.fromkeys(idx["nifty50"] + idx["nifty_next50"] + idx["midcap50"] + fo_symbols()) if x not in dead]
     return {
         "NSE":    {"tickers": [f"{s}.NS" for s in nse], "tz": "Asia/Kolkata",
                    "hours": ((9, 15), (15, 35)), "first_bar": (9, 15), "last_bar": (15, 15), "report_after": (15, 31), "cur": "₹"},

@@ -33,6 +33,7 @@ OUT_DIR = os.path.join(BASE, "learning")
 STORE = os.path.join(OUT_DIR, "signals.csv.gz")
 SCORECARD = os.path.join(OUT_DIR, "scorecard.json")
 TZ = "Asia/Kolkata"
+SKIP_BARS = ((9, 15), (15, 15))   # opening and closing candle of the session (US run overrides)
 COST = 0.05          # % round trip
 MIN_N, MIN_DAYS = 150, 20
 T_PROVEN, T_PROMISING = 3.5, 2.0   # strict because ~290 setups are tested at once
@@ -100,7 +101,7 @@ def build_rows(data, nifty, only_dates):
         for pos in range(60, n - 1):
             day = dates[pos]
             ts = df.index[pos]
-            if (ts.hour, ts.minute) in ((9, 15), (15, 15)) or daypos[pos] + 1 >= daylen[pos]:
+            if (ts.hour, ts.minute) in SKIP_BARS or daypos[pos] + 1 >= daylen[pos]:
                 continue
             if day not in only_dates:
                 continue

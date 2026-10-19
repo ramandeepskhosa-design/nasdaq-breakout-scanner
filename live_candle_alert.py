@@ -46,7 +46,7 @@ NW_MAX_WICK      = 20.0
 NW_STREAK        = 3
 # "Near day low/high" alert: price sits at the day's extreme after small-closing-wick candles.
 EXT_NEAR_PCT      = 0.30   # close within this % (of price) of the day's low (short) / high (long)
-EMA_ORDER_PERIODS = (50, 100, 200)   # only these three must be in strict order (rising or falling)
+EMA_ORDER_PERIODS = (20, 50, 100, 200)   # BULL alerts need 20>50>100>200 (ascending), BEAR alerts 20<50<100<200 (descending)
 ALERT_KINDS = {"EXTREME"}   # ONLY the single-candle near-day-low/high alert; impulse and no-wick streak alerts are off
 EXT_ALLOW_TWO = False       # two-candle path switched off: a single strong candle (wick <= EXT_WICK_1) is required
 EXT_COOLDOWN_MIN = 60     # a stock can re-alert NEAR DAY LOW/HIGH (same direction) after this many minutes
@@ -101,11 +101,11 @@ def load_markets():
     nse = [x for x in dict.fromkeys(idx["nifty50"] + idx["nifty_next50"] + idx["midcap50"] + fo_symbols()) if x not in dead]
     return {
         "NSE":    {"tickers": [f"{s}.NS" for s in nse], "tz": "Asia/Kolkata",
-                   "hours": ((9, 15), (15, 35)), "first_bar": (9, 15), "last_bar": (15, 15), "report_after": (15, 31), "cur": "₹"},
+                   "hours": ((9, 15), (15, 35)), "first_bar": (9, 15), "last_bar": (15, 15), "report_after": (15, 31), "cur": "₹", "need_vwap": True},
         "INDEX":  {"tickers": list(INDEX_NAMES), "tz": "Asia/Kolkata", "ext_min_range": 0.35, "need_ema": False,
                    "hours": ((9, 15), (15, 35)), "first_bar": (9, 15), "last_bar": (15, 15), "report_after": (15, 31), "cur": ""},
         "US":     {"tickers": uni, "tz": "America/New_York",
-                   "hours": ((9, 30), (16, 5)), "first_bar": (9, 30), "last_bar": (15, 45), "report_after": (16, 1), "cur": "$"},
+                   "hours": ((9, 30), (16, 5)), "first_bar": (9, 30), "last_bar": (15, 45), "report_after": (16, 1), "cur": "$", "need_vwap": True},
         "CRYPTO": {"tickers": list(CRYPTO), "tz": "UTC", "hours": None, "report_after": (23, 46), "cur": "$"},
     }
 
@@ -180,16 +180,33 @@ def fetch(tickers, chunk=50, period="2d"):
 
 
 def ema_aligned(closes, direction=None):
-    """True when EMA 50, 100 and 200 (15m) are in a clean strict order - either rising
-    (50>100>200) or falling (50<100<200). The order is required, the direction is not: it
-    applies to bullish and bearish signals alike (`direction` is kept only so older callers
-    still work). Evaluated at the last completed candle."""
+    """15m EMA 20, 50, 100, 200 in strict order that matches the alert: ascending (20>50>100>200) for BULL,
+    descending (20<50<100<200) for BEAR. direction=None accepts either order. Evaluated at the last completed candle."""
     if len(closes) < EMA_MIN_BARS:
         return False
     e = [closes.ewm(span=p, adjust=False).mean().iloc[-1] for p in EMA_ORDER_PERIODS]
     rising = all(e[i] > e[i + 1] for i in range(len(e) - 1))
     falling = all(e[i] < e[i + 1] for i in range(len(e) - 1))
+    if direction == "bull":
+        return rising
+    if direction == "bear":
+        return falling
     return rising or falling
+
+
+def vwap_at(df, bar_ts, tz):
+    """Session VWAP up to and including the candle that starts at bar_ts (None when the data has no volume)."""
+    try:
+        d = df.dropna(subset=["High", "Low", "Close", "Volume"]).copy()
+        d.index = d.index.tz_convert(tz) if d.index.tz is not None else d.index.tz_localize("UTC").tz_convert(tz)
+        t = pd.Timestamp(bar_ts).tz_convert(tz)
+        sub = d[(d.index.date == t.date()) & (d.index <= t)]
+        vol = sub["Volume"].astype(float)
+        if len(sub) == 0 or vol.sum() <= 0:
+            return None
+        return float((((sub["High"] + sub["Low"] + sub["Close"]) / 3) * vol).sum() / vol.sum())
+    except Exception:
+        return None
 
 
 def completed(df, now_utc):
@@ -558,6 +575,10 @@ def run_cycle(markets, state, force, dry, only):
                 if need_ema and (closes is None or not ema_aligned(closes, p["dir"])):
                     dropped += 1
                     continue
+                vw = vwap_at(ldf, p["bar"], m["tz"]) if (ldf is not None and m.get("need_vwap")) else None
+                if vw is not None and ((p["dir"] == "bull" and p["px"] < vw) or (p["dir"] == "bear" and p["px"] > vw)):
+                    dropped += 1       # price is on the wrong side of VWAP for this direction
+                    continue
                 sym = {**CRYPTO, **INDEX_NAMES}.get(p["t"], p["t"].replace(".NS", ""))
                 book = order_book_note(p["t"], p["dir"]) if name == "CRYPTO" else ""
                 if name == "NSE":
@@ -566,6 +587,8 @@ def run_cycle(markets, state, force, dry, only):
                     ok = closes is not None and ema_aligned(closes, p["dir"])
                     book = (f"\n    📈 EMA 5-200 stack: {'✅ aligned' if ok else '⚠️ not fully aligned'} (shown anyway for indices)"
                             + index_volume_note(p["t"], p["bar"]))
+                if vw is not None:
+                    book += f"\n    📍 VWAP {m['cur']}{vw:,.2f} - price {(p['px'] / vw - 1) * 100:+.2f}% {'above' if p['px'] >= vw else 'below'} (with you)"
                 icon = "🟢" if p["dir"] == "bull" else "🔴"
                 if p["kind"] == "EXTREME":
                     action = "SHORT setup" if p["dir"] == "bear" else "LONG setup"
@@ -575,11 +598,11 @@ def run_cycle(markets, state, force, dry, only):
                 sent.append({"ts": now.isoformat(), "market": name, "date": p["date"], "bar": p["bar"],
                              "t": p["t"], "sym": sym, "kind": p["kind"], "dir": p["dir"], "px": p["px"]})
         print(f"[{datetime.now().strftime('%H:%M:%S')}] {name}: {len(data)} fetched, "
-              f"{len(pending)} candidates, {dropped} dropped (EMAs not in order), "
+              f"{len(pending)} candidates, {dropped} dropped (EMA/VWAP filter), "
               f"{len(lines)} alerts, {time.time() - t0:.0f}s")
         if lines:
             for k in range(0, len(lines), 40):
-                head = f"<b>🕯️ Live candle alert - {name} (15m, EMA 50/100/200 in clean order)</b>\n"
+                head = f"<b>🕯️ Live candle alert - {name} (15m, EMA 20>50>100>200 bull / 20<50<100<200 bear, VWAP side)</b>\n"
                 send(head + "\n".join(lines[k:k + 40]), dry)
             if not dry:
                 append_log(sent)

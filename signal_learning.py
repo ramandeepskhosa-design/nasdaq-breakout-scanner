@@ -83,8 +83,8 @@ def build_rows(data, nifty, only_dates):
         df["rsi"] = rsi(c)
         for p in L.EMA_PERIODS:
             df[f"e{p}"] = c.ewm(span=p, adjust=False).mean()
-        df["bull_al"] = ((df.e50 > df.e100) & (df.e100 > df.e200)).astype(int)     # rising 50>100>200
-        df["bear_al"] = ((df.e50 < df.e100) & (df.e100 < df.e200)).astype(int)     # falling 50<100<200
+        df["bull_al"] = ((df.e20 > df.e50) & (df.e50 > df.e100) & (df.e100 > df.e200)).astype(int)   # ascending, for BULL signals
+        df["bear_al"] = ((df.e20 < df.e50) & (df.e50 < df.e100) & (df.e100 < df.e200)).astype(int)   # descending, for BEAR signals
         tp = (df.High + df.Low + df.Close) / 3
         vol = df.Volume.replace(0, np.nan)
         df["vwap"] = (tp * vol).groupby(df.date).cumsum() / vol.groupby(df.date).cumsum()
@@ -142,7 +142,8 @@ def build_rows(data, nifty, only_dates):
                     n_chg_dir=round(float(r.nchg) * s, 3) if pd.notna(r.nchg) else np.nan,
                     chg_open_dir=round(r.chg_open * s, 3), rsi_dir=round(r.rsi if s == 1 else 100 - r.rsi, 1),
                     vol_ratio=round(float(r.vol_ratio), 2) if pd.notna(r.vol_ratio) else np.nan,
-                    aligned=int(r.bull_al or r.bear_al),
+                    aligned=int(r.bull_al if s == 1 else r.bear_al),
+                    vwap_ok=int(r.Close >= r.vwap if s == 1 else r.Close <= r.vwap),
                     entry=round(float(e), 2), ret_eod=round(eod - COST, 4), r_mult=round(res, 3)))
     out = pd.DataFrame(rows)
     if len(out):
@@ -258,7 +259,7 @@ def fmt_setup(r):
 def build_report(store, sc, card, new_rows):
     last = store.date.max()
     day_all = store[store.date == last]
-    td = day_all[(day_all.aligned == 1) & day_all.kind.isin(L.ALERT_KINDS)]   # what the live service actually alerts
+    td = day_all[(day_all.aligned == 1) & (day_all.vwap_ok == 1) & day_all.kind.isin(L.ALERT_KINDS)]   # what the live service actually alerts
     lines = [f"🧠 <b>Daily learning - NSE - {last}</b>",
              f"Memory: {len(store):,} signals over {store.date.nunique()} days "
              f"(+{new_rows} newly learned)", ""]

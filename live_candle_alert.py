@@ -511,32 +511,39 @@ def run_cycle(markets, state, force, dry, only):
         data = fetch(m["tickers"])
         pending = []
         for t, df in data.items():
-            bars = completed(df, now)
-            if len(bars) < AVG_LEN + 2:
-                continue
-            ts = str(bars.index[-1])
-            local_bar = bars.index[-1].astimezone(ZoneInfo(m["tz"]))
-            if m.get("first_bar") and (local_bar.hour, local_bar.minute) == m["first_bar"]:
-                continue   # opening candle: gap/auction noise, never alerted
-            if m.get("last_bar") and (local_bar.hour, local_bar.minute) == m["last_bar"]:
-                continue   # closing-drift candle: full body on thin volume, mostly noise
-            day_local = local_bar.strftime("%Y-%m-%d")
-            for kind, d, detail in evaluate(bars) + evaluate_extreme(bars, m["tz"], m.get("ext_min_range", EXT_MIN_RANGE_PCT)):
-                if kind not in ALERT_KINDS:
+            full = completed(df, now)
+            # Look at the newest completed candle AND the one before it (if it closed < 35 min ago), so a cycle that was
+            # killed, restarted or starved by Yahoo rate-limiting never loses a candle. Already-alerted signals are
+            # skipped by the state keys / the 60-minute cool-down below.
+            for back in (1, 0):
+                bars = full.iloc[:len(full) - back]
+                if len(bars) < AVG_LEN + 2:
                     continue
-                key = f"{t}|{day_local}|EXTREME|{d}" if kind == "EXTREME" else f"{t}|{ts}|{kind}"
-                if key in state:
-                    if kind != "EXTREME":
+                if back and (now - (bars.index[-1] + BAR).to_pydatetime()) > timedelta(minutes=35):
+                    continue
+                ts = str(bars.index[-1])
+                local_bar = bars.index[-1].astimezone(ZoneInfo(m["tz"]))
+                if m.get("first_bar") and (local_bar.hour, local_bar.minute) == m["first_bar"]:
+                    continue   # opening candle: gap/auction noise, never alerted
+                if m.get("last_bar") and (local_bar.hour, local_bar.minute) == m["last_bar"]:
+                    continue   # closing-drift candle: full body on thin volume, mostly noise
+                day_local = local_bar.strftime("%Y-%m-%d")
+                for kind, d, detail in evaluate(bars) + evaluate_extreme(bars, m["tz"], m.get("ext_min_range", EXT_MIN_RANGE_PCT)):
+                    if kind not in ALERT_KINDS:
                         continue
-                    try:
-                        age = (now - datetime.fromisoformat(state[key])).total_seconds()
-                    except Exception:
-                        age = 0
-                    if age < EXT_COOLDOWN_MIN * 60:
-                        continue       # same stock/direction alerted less than an hour ago
-                state[key] = now.isoformat()
-                pending.append({"t": t, "kind": kind, "dir": d, "detail": detail,
-                                "px": float(bars["Close"].iloc[-1]), "bar": ts, "date": day_local})
+                    key = f"{t}|{day_local}|EXTREME|{d}" if kind == "EXTREME" else f"{t}|{ts}|{kind}"
+                    if key in state:
+                        if kind != "EXTREME":
+                            continue
+                        try:
+                            age = (now - datetime.fromisoformat(state[key])).total_seconds()
+                        except Exception:
+                            age = 0
+                        if age < EXT_COOLDOWN_MIN * 60:
+                            continue       # same stock/direction alerted less than an hour ago
+                    state[key] = now.isoformat()
+                    pending.append({"t": t, "kind": kind, "dir": d, "detail": detail,
+                                    "px": float(bars["Close"].iloc[-1]), "bar": ts, "date": day_local})
 
         # Stage 2: only candidates get the long history needed for EMA5..EMA200
         lines, sent, dropped = [], [], 0

@@ -66,10 +66,38 @@ CRYPTO = {"BTC-USD": "Bitcoin", "ETH-USD": "Ethereum", "SOL-USD": "Solana",
           "BNB-USD": "BNB", "XRP-USD": "XRP", "DOGE-USD": "Dogecoin"}
 
 
+FO_FILE = os.path.join(BASE_DIR, "learning", "fo_symbols.txt")
+FO_URL = "https://nsearchives.nseindia.com/content/fo/fo_mktlots.csv"
+
+
+def fo_symbols():
+    """All NSE F&O stocks (official lot-size list). Re-downloaded at most every 3 days; the saved copy is the fallback."""
+    try:
+        fresh = os.path.exists(FO_FILE) and time.time() - os.path.getmtime(FO_FILE) < 3 * 86400
+        if not fresh:
+            r = urllib.request.Request(FO_URL, headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"})
+            text = urllib.request.urlopen(r, timeout=20).read().decode()
+            skip = {"NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50", "NIFTYFPI", "SYMBOL"}
+            syms = []
+            for line in text.splitlines()[1:]:
+                parts = [x.strip() for x in line.split(",")]
+                if len(parts) > 1 and parts[1] and parts[1] not in skip and not parts[1].startswith("Symbol"):
+                    syms.append(parts[1])
+            if len(syms) > 150:
+                os.makedirs(os.path.dirname(FO_FILE), exist_ok=True)
+                open(FO_FILE, "w").write("\n".join(syms))
+    except Exception as e:
+        print("F&O list refresh failed, using saved copy:", str(e)[:80])
+    try:
+        return [x.strip() for x in open(FO_FILE).read().split() if x.strip()]
+    except Exception:
+        return []
+
+
 def load_markets():
     uni = json.load(open(os.path.join(BASE_DIR, "universe.json")))["universe"]
     idx = json.load(open(os.path.join(BASE_DIR, "nse_index_stocks.json")))
-    nse = list(dict.fromkeys(idx["nifty50"] + idx["nifty_next50"] + idx["midcap50"]))
+    nse = list(dict.fromkeys(idx["nifty50"] + idx["nifty_next50"] + idx["midcap50"] + fo_symbols()))
     return {
         "NSE":    {"tickers": [f"{s}.NS" for s in nse], "tz": "Asia/Kolkata",
                    "hours": ((9, 15), (15, 35)), "first_bar": (9, 15), "last_bar": (15, 15), "report_after": (15, 31), "cur": "₹"},

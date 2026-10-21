@@ -139,6 +139,58 @@ def report(done):
     return "\n".join(lines), msg, S50
 
 
+SKILL_DIR = os.path.expanduser("~/.claude/skills/trend-hold-hypothesis")
+LEARN = os.path.join(SKILL_DIR, "LEARNINGS.md")
+HIST = os.path.join(BASE, "learning", "hypothesis_history.csv")
+A0, A1 = "<!-- AUTO:START -->", "<!-- AUTO:END -->"
+
+
+def write_learnings(done, text):
+    """Rewrite the AUTO block of the skill's LEARNINGS.md with the latest facts; the agent's own notes below it are kept."""
+    S50, S100 = split_stats(done, "d50"), split_stats(done, "d100")
+    today = datetime.now(ZoneInfo(TZ)).strftime("%Y-%m-%d")
+    row = dict(date=today)
+    for side in ("BEAR", "BULL"):
+        for src in ("backfill", "live"):
+            for nm, S in (("e50", S50), ("e100", S100)):
+                Z = S[(S.side == side) & (S.source == src)] if len(S) else S
+                row[f"{side}_{src}_{nm}_days"] = len(Z)
+                row[f"{side}_{src}_{nm}_diff"] = round(Z["diff"].mean(), 3) if len(Z) else np.nan
+                row[f"{side}_{src}_{nm}_conf"] = round((Z["diff"] > 0).mean() * 100, 1) if len(Z) else np.nan
+    h = pd.read_csv(HIST) if os.path.exists(HIST) else pd.DataFrame()
+    h = pd.concat([h[h.date != today] if len(h) else h, pd.DataFrame([row])], ignore_index=True)
+    h.to_csv(HIST, index=False)
+    health = "unknown"
+    try:
+        lines = [x for x in open(os.path.expanduser("~/Library/Logs/live_candle_alert.log")) if "NSE:" in x and x.startswith("[")]
+        health = lines[-1].strip()[:140]
+    except Exception:
+        pass
+    sc = ""
+    try:
+        card = json.load(open(os.path.join(BASE, "learning", "scorecard.json")))
+        sc = f"Alert-setup scorecard: {card.get('signals', '?')} signals over {card.get('days', '?')} days through {card.get('through', '?')}, proven setups: {len(card.get('proven', []))}."
+    except Exception:
+        pass
+    block = [A0, f"## Auto-updated facts ({datetime.now(ZoneInfo(TZ)).strftime('%Y-%m-%d %H:%M')} IST, written by hypothesis_tracker.py - do not edit by hand)", "",
+             text.split("\n", 3)[-1].strip(), "", sc, f"Last live NSE scan cycle: {health}", "",
+             "### History (last 20 updates; bear = closest-minus-farthest next-day excess %, live = out-of-sample)", "",
+             "| date | live days (EMA50) | bear live diff e50 | bear live diff e100 | bear baseline e100 | bull live diff e50 |", "|---|---|---|---|---|---|"]
+    for _, r in h.tail(20).iterrows():
+        block.append(f"| {r.date} | {int(r.get('BEAR_live_e50_days', 0))} | {r.get('BEAR_live_e50_diff', '')} | {r.get('BEAR_live_e100_diff', '')} | {r.get('BEAR_backfill_e100_diff', '')} | {r.get('BULL_live_e50_diff', '')} |")
+    block.append(A1)
+    new = "\n".join(block)
+    os.makedirs(SKILL_DIR, exist_ok=True)
+    old = open(LEARN).read() if os.path.exists(LEARN) else ""
+    if A0 in old and A1 in old:
+        out = old[:old.index(A0)] + new + old[old.index(A1) + len(A1):]
+    else:
+        out = ("# Trend-hold hypothesis - learnings\n\nThe block between the AUTO markers is rewritten every day by hypothesis_tracker.py. "
+               "Everything below it belongs to the daily Claude review agent (notes and proposals).\n\n" + new +
+               "\n\n## Agent review log (newest first)\n\n(none yet)\n\n## Proposals awaiting the user's approval\n\n(none)\n")
+    open(LEARN, "w").write(out)
+
+
 def main():
     dry, force = "--dry" in sys.argv, "--force" in sys.argv
     tick = T.universe()
@@ -152,6 +204,7 @@ def main():
         return
     text, msg, S50 = report(done)
     open(SUMMARY, "w").write(text)
+    write_learnings(done, text)
     print(text)
     live_days = sorted(set(S50[S50.source == "live"].day)) if len(S50) else []
     try:

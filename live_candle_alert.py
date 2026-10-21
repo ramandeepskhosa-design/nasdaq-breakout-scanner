@@ -20,12 +20,15 @@ Usage:
            --only=NSE,CRYPTO (limit markets)
 Env: TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
 """
+import html
 import json
+import re
 import os
 import resource
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -314,9 +317,26 @@ def send(text, dry):
         print(text)
         return
     url = f"https://api.telegram.org/bot{os.environ['TELEGRAM_BOT_TOKEN']}/sendMessage"
-    data = urllib.parse.urlencode({"chat_id": os.environ["TELEGRAM_CHAT_ID"],
-                                   "text": text, "parse_mode": "HTML"}).encode()
-    urllib.request.urlopen(urllib.request.Request(url, data=data, method="POST"), timeout=15)
+
+    def post(body, parse_mode):
+        fields = {"chat_id": os.environ["TELEGRAM_CHAT_ID"], "text": body}
+        if parse_mode:
+            fields["parse_mode"] = parse_mode
+        urllib.request.urlopen(urllib.request.Request(url, data=urllib.parse.urlencode(fields).encode(), method="POST"), timeout=15)
+
+    try:
+        post(text, "HTML")
+    except urllib.error.HTTPError as e:
+        detail = ""
+        try:
+            detail = e.read().decode()[:200]
+        except Exception:
+            pass
+        print(f"telegram HTTP {e.code}: {detail}")
+        if e.code != 400:
+            raise
+        # 400 = Telegram could not parse the HTML (stray < or >): resend as plain text so the alert is never lost
+        post(re.sub(r"</?(b|i|u|code|pre)>", "", text), None)
 
 
 def append_log(entries):
@@ -526,7 +546,7 @@ def run_cycle(markets, state, force, dry, only):
             continue
         t0 = time.time()
         data = fetch(m["tickers"])
-        pending = []
+        pending, new_keys = [], []
         for t, df in data.items():
             full = completed(df, now)
             # Look at the newest completed candle AND the one before it (if it closed < 35 min ago), so a cycle that was
@@ -559,6 +579,7 @@ def run_cycle(markets, state, force, dry, only):
                         if age < EXT_COOLDOWN_MIN * 60:
                             continue       # same stock/direction alerted less than an hour ago
                     state[key] = now.isoformat()
+                    new_keys.append(key)
                     pending.append({"t": t, "kind": kind, "dir": d, "detail": detail,
                                     "px": float(bars["Close"].iloc[-1]), "bar": ts, "date": day_local})
 
@@ -601,11 +622,17 @@ def run_cycle(markets, state, force, dry, only):
               f"{len(pending)} candidates, {dropped} dropped (EMA/VWAP filter), "
               f"{len(lines)} alerts, {time.time() - t0:.0f}s")
         if lines:
-            for k in range(0, len(lines), 40):
-                head = f"<b>🕯️ Live candle alert - {name} (15m, all EMAs 5/10/20/50/100/200 ascending bull / descending bear, VWAP side)</b>\n"
-                send(head + "\n".join(lines[k:k + 40]), dry)
-            if not dry:
-                append_log(sent)
+            try:
+                for k in range(0, len(lines), 40):
+                    head = f"<b>🕯️ Live candle alert - {name} (15m, all EMAs 5/10/20/50/100/200 ascending bull / descending bear, VWAP side)</b>\n"
+                    send(head + "\n".join(lines[k:k + 40]), dry)
+                if not dry:
+                    append_log(sent)
+            except Exception as e:
+                # delivery failed: forget these signals so the next cycle's catch-up window sends them
+                print(f"ALERT SEND FAILED for {name}: {e}")
+                for key in new_keys:
+                    state.pop(key, None)
         if not dry:
             maybe_report(name, m, now, state, data, dry)
 

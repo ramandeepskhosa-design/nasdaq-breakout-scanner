@@ -117,6 +117,19 @@ def pending():
             items.append((f"live NSE daily signal report for {D} not sent (the live service sends it when it next runs)", ""))
     except Exception:
         pass
+    # intraday 09:30 -> 10:30 morning screen
+    try:
+        ms = json.load(open(os.path.join(LEARN, "morning_sent.json"))).get("day", "")
+    except Exception:
+        ms = ""
+    if ms and ms < D and due("09:45"):
+        items.append((f"the 09:30 morning list for {D} was missed (Mac off at 09:32); it cannot be replayed live - tomorrow's run continues", ""))
+    try:
+        mt = json.load(open(os.path.join(LEARN, "morning_tracked.json"))).get("day", "")
+    except Exception:
+        mt = ""
+    if ms >= D and mt < D and due("10:50"):
+        items.append((f"09:30->10:30 results for {D} not measured yet", f"cd {BASE} && {PYTHON} intraday_0930.py track"))
     # live service
     if not service_running("com.ramandeep.livecandlealert"):
         items.append(("live alert service is NOT running", f"launchctl kickstart -k gui/{os.getuid()}/com.ramandeep.livecandlealert"))

@@ -86,28 +86,34 @@ def pending():
     if not D:
         return None, [("could not check (offline or Yahoo unavailable)", "")]
     now = datetime.now(TZ)
+    today = now.strftime("%Y-%m-%d")
+
+    def due(hhmm):
+        """For today's session, an item only counts as pending once its scheduled time (+ grace) has passed."""
+        return D != today or now.strftime("%H:%M") >= hhmm
+
     # nightly learning report
-    if read(os.path.join(LEARN, "last_sent.txt")) < D:
+    if read(os.path.join(LEARN, "last_sent.txt")) < D and due("16:15"):
         items.append((f"nightly learning report for {D} not sent", f"cd {BASE} && {PYTHON} signal_learning.py"))
     # 3 PM trend-hold scan (cannot be re-run for a past day: it needs the 15:00 candle)
     try:
         ts = json.load(open(os.path.join(LEARN, "trend_scan_sent.json"))).get("day", "")
     except Exception:
         ts = ""
-    if ts < D:
+    if ts < D and due("15:40"):
         items.append((f"3 PM trend-hold scan for {D} was missed (Mac off at 15:01); it cannot be replayed live - tomorrow's run continues the log", ""))
     # hypothesis tracker
     hist = read(os.path.join(LEARN, "hypothesis_history.csv"))
     last_hist = hist.splitlines()[-1].split(",")[0] if hist.count("\n") >= 1 else ""
-    if last_hist < D:
+    if last_hist < D and due("16:30"):
         items.append((f"hypothesis tracker has not measured {D} yet", f"cd {BASE} && {PYTHON} hypothesis_tracker.py"))
     # daily review agent
-    if review_done_day() < D:
+    if review_done_day() < D and due("17:30"):
         items.append((f"daily Claude review for {D} has not run (it runs when the app is open at ~16:30, or run 'trading-bot-daily-review' from the Scheduled section)", ""))
     # live daily signal report
     try:
         st = json.load(open(os.path.join(BASE, ".live_alert_state.json")))
-        if f"REPORT|NSE|{D}" not in st:
+        if f"REPORT|NSE|{D}" not in st and due("15:50"):
             items.append((f"live NSE daily signal report for {D} not sent (the live service sends it when it next runs)", ""))
     except Exception:
         pass

@@ -83,8 +83,8 @@ def build_rows(data, nifty, only_dates):
         df["rsi"] = rsi(c)
         for p in L.EMA_PERIODS:
             df[f"e{p}"] = c.ewm(span=p, adjust=False).mean()
-        df["bull_al"] = ((df.e20 > df.e50) & (df.e50 > df.e100) & (df.e100 > df.e200)).astype(int)   # ascending, for BULL signals
-        df["bear_al"] = ((df.e20 < df.e50) & (df.e50 < df.e100) & (df.e100 < df.e200)).astype(int)   # descending, for BEAR signals
+        df["bull_al"] = ((df.e5 > df.e10) & (df.e10 > df.e20) & (df.e20 > df.e50) & (df.e50 > df.e100) & (df.e100 > df.e200)).astype(int)   # ALL six ascending, for BULL
+        df["bear_al"] = ((df.e5 < df.e10) & (df.e10 < df.e20) & (df.e20 < df.e50) & (df.e50 < df.e100) & (df.e100 < df.e200)).astype(int)   # ALL six descending, for BEAR
         tp = (df.High + df.Low + df.Close) / 3
         vol = df.Volume.replace(0, np.nan)
         df["vwap"] = (tp * vol).groupby(df.date).cumsum() / vol.groupby(df.date).cumsum()

@@ -46,7 +46,7 @@ NW_MAX_WICK      = 20.0
 NW_STREAK        = 3
 # "Near day low/high" alert: price sits at the day's extreme after small-closing-wick candles.
 EXT_NEAR_PCT      = 0.30   # close within this % (of price) of the day's low (short) / high (long)
-EMA_ORDER_PERIODS = (20, 50, 100, 200)   # BULL alerts need 20>50>100>200 (ascending), BEAR alerts 20<50<100<200 (descending)
+EMA_ORDER_PERIODS = (5, 10, 20, 50, 100, 200)   # ALL six EMAs in strict order: BULL = 5>10>20>50>100>200 (ascending), BEAR = 5<10<20<50<100<200 (descending)
 ALERT_KINDS = {"EXTREME"}   # ONLY the single-candle near-day-low/high alert; impulse and no-wick streak alerts are off
 EXT_ALLOW_TWO = False       # two-candle path switched off: a single strong candle (wick <= EXT_WICK_1) is required
 EXT_COOLDOWN_MIN = 60     # a stock can re-alert NEAR DAY LOW/HIGH (same direction) after this many minutes
@@ -180,8 +180,8 @@ def fetch(tickers, chunk=50, period="2d"):
 
 
 def ema_aligned(closes, direction=None):
-    """15m EMA 20, 50, 100, 200 in strict order that matches the alert: ascending (20>50>100>200) for BULL,
-    descending (20<50<100<200) for BEAR. direction=None accepts either order. Evaluated at the last completed candle."""
+    """15m EMA 5, 10, 20, 50, 100, 200 ALL in strict order that matches the alert: ascending for BULL,
+    descending for BEAR. direction=None accepts either order. Evaluated at the last completed candle."""
     if len(closes) < EMA_MIN_BARS:
         return False
     e = [closes.ewm(span=p, adjust=False).mean().iloc[-1] for p in EMA_ORDER_PERIODS]
@@ -602,7 +602,7 @@ def run_cycle(markets, state, force, dry, only):
               f"{len(lines)} alerts, {time.time() - t0:.0f}s")
         if lines:
             for k in range(0, len(lines), 40):
-                head = f"<b>🕯️ Live candle alert - {name} (15m, EMA 20>50>100>200 bull / 20<50<100<200 bear, VWAP side)</b>\n"
+                head = f"<b>🕯️ Live candle alert - {name} (15m, all EMAs 5/10/20/50/100/200 ascending bull / descending bear, VWAP side)</b>\n"
                 send(head + "\n".join(lines[k:k + 40]), dry)
             if not dry:
                 append_log(sent)

@@ -511,6 +511,89 @@ def learning_note(kind, direction, bar_ts, nchg):
     return note
 
 
+_NSE_SESSION = None
+OI_LOG = os.path.join(BASE_DIR, "learning", "oi_log.csv")
+
+
+def _nse_session():
+    """NSE needs a cookie warm-up before its JSON APIs answer (same trick as oi_snapshot.py)."""
+    global _NSE_SESSION
+    if _NSE_SESSION is None:
+        import requests
+        sess = requests.Session()
+        sess.headers.update({"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+                             "Accept": "*/*", "Accept-Language": "en-US,en;q=0.9", "Referer": "https://www.nseindia.com/option-chain"})
+        sess.get("https://www.nseindia.com", timeout=8)
+        sess.get("https://www.nseindia.com/option-chain", timeout=8)
+        _NSE_SESSION = sess
+    return _NSE_SESSION
+
+
+def oi_context(now_ist):
+    """Futures+options open interest for all F&O stocks from NSE (one request): {symbol: {oi, prev, chg, pct, d15}}.
+    d15 = OI change since the snapshot ~15 minutes ago (from learning/oi_log.csv), None if no snapshot. Never raises."""
+    try:
+        sess = _nse_session()
+        j = sess.get("https://www.nseindia.com/api/live-analysis-oi-spurts-underlyings", timeout=10).json()
+        rows = j.get("data", [])
+        if not rows:
+            return {}
+        ts = now_ist.strftime("%Y-%m-%d %H:%M")
+        old = pd.DataFrame()
+        try:
+            old = pd.read_csv(OI_LOG, usecols=["ts", "symbol", "latestOI"])
+            old["t"] = pd.to_datetime(old.ts)
+            cut = pd.Timestamp(now_ist.replace(tzinfo=None))
+            old = old[(old.t >= cut - pd.Timedelta(minutes=40)) & (old.t <= cut - pd.Timedelta(minutes=9))]
+        except Exception:
+            pass
+        out, newrows = {}, []
+        target = pd.Timestamp(now_ist.replace(tzinfo=None)) - pd.Timedelta(minutes=15)
+        for r in rows:
+            sym = r["symbol"]
+            d15 = None
+            if len(old):
+                o = old[old.symbol == sym]
+                if len(o):
+                    k = (o.t - target).abs().idxmin()
+                    d15 = (float(r["latestOI"]) - float(o.loc[k, "latestOI"]), int((pd.Timestamp(now_ist.replace(tzinfo=None)) - o.loc[k, "t"]).total_seconds() / 60))
+            out[sym] = dict(oi=r["latestOI"], prev=r["prevOI"], chg=r["changeInOI"], pct=r["avgInOI"], d15=d15)
+            newrows.append(f"{ts},{sym},{r['latestOI']},{r['prevOI']},{r['changeInOI']},{r['avgInOI']},{r['volume']},{r['underlyingValue']}\n")
+        try:   # keep the OI history going from the alert cycle too (oi_snapshot.py logs it every 15 min as well)
+            last = open(OI_LOG).readlines()[-1].split(",")[0] if os.path.exists(OI_LOG) else ""
+            if not last or (pd.Timestamp(ts) - pd.Timestamp(last)).total_seconds() > 420:
+                with open(OI_LOG, "a") as f:
+                    f.writelines(newrows)
+        except Exception:
+            pass
+        return out
+    except Exception as e:
+        print("OI lookup failed:", str(e)[:80])
+        return {}
+
+
+def oi_note(sym, direction, day_price_chg, ctx):
+    """One line: OI today (and the last ~15 min) and what it usually means for this price direction."""
+    c = ctx.get(sym)
+    if not c:
+        return ""
+    pct = float(c["pct"])
+    if abs(pct) < 0.3:
+        meaning, ok = "OI flat", None
+    elif pct > 0:
+        meaning = "new shorts (short build-up)" if day_price_chg < 0 else "new longs (long build-up)"
+        ok = (direction == "bear") == (day_price_chg < 0)
+    else:
+        meaning = "long unwinding" if day_price_chg < 0 else "short covering"
+        ok = (direction == "bear") == (day_price_chg < 0)
+    mark = "" if ok is None else (" \u2705 supports" if ok else " \u26a0\ufe0f against")
+    line = f"\n    \U0001f4ca OI today {c['chg']:+,.0f} ({pct:+.1f}%) = {meaning}{mark}"
+    if c.get("d15"):
+        d, mins = c["d15"]
+        line += f"; last {mins} min {d:+,.0f} ({'SHEDDING' if d < 0 else 'building' if d > 0 else 'flat'})"
+    return line
+
+
 def order_book_note(ticker, direction):
     """Crypto only: live Binance order-book imbalance within 0.2% of price (free, no key)."""
     try:
@@ -586,6 +669,7 @@ def run_cycle(markets, state, force, dry, only):
         # Stage 2: only candidates get the long history needed for EMA5..EMA200
         lines, sent, dropped = [], [], 0
         nchg = nifty_change_from_open(now) if (pending and name == "NSE") else None
+        oi_ctx = oi_context(now.astimezone(ZoneInfo("Asia/Kolkata"))) if (pending and name == "NSE") else {}
         if pending:
             long_data = fetch(sorted({p["t"] for p in pending}),
                               period="10d" if name == "CRYPTO" else "30d")
@@ -603,7 +687,16 @@ def run_cycle(markets, state, force, dry, only):
                 sym = {**CRYPTO, **INDEX_NAMES}.get(p["t"], p["t"].replace(".NS", ""))
                 book = order_book_note(p["t"], p["dir"]) if name == "CRYPTO" else ""
                 if name == "NSE":
-                    book = learning_note(p["kind"], p["dir"], p["bar"], nchg) + volume_note(slot_volume_ratio(ldf, p["bar"]) if ldf is not None else None)
+                    dchg = 0.0
+                    try:
+                        dd = ldf.dropna(subset=["Close"]).copy()
+                        dd.index = dd.index.tz_convert("Asia/Kolkata")
+                        dsr = dd.index.strftime("%Y-%m-%d")
+                        dchg = (p["px"] / float(dd.Close[dsr < p["date"]].iloc[-1]) - 1) * 100
+                    except Exception:
+                        pass
+                    book = (learning_note(p["kind"], p["dir"], p["bar"], nchg) + volume_note(slot_volume_ratio(ldf, p["bar"]) if ldf is not None else None)
+                            + oi_note(p["t"].replace(".NS", ""), p["dir"], dchg, oi_ctx))
                 elif name == "INDEX":
                     ok = closes is not None and ema_aligned(closes, p["dir"])
                     book = (f"\n    📈 EMA 5-200 stack: {'✅ aligned' if ok else '⚠️ not fully aligned'} (shown anyway for indices)"

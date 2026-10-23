@@ -340,6 +340,20 @@ def send(text, dry):
         post(re.sub(r"</?(b|i|u|code|pre)>", "", text), None)
 
 
+def send_chunks(head, lines, dry, limit=3400):
+    """Send head + lines as one or more Telegram messages, each under the 4096-character limit (splits by length, not by count)."""
+    chunk, size = [], len(head)
+    for ln in lines:
+        add = len(ln) + 1
+        if chunk and size + add > limit:
+            send(head + "\n".join(chunk), dry)
+            chunk, size = [], len(head)
+        chunk.append(ln)
+        size += add
+    if chunk:
+        send(head + "\n".join(chunk), dry)
+
+
 def append_log(entries):
     with open(LOG_FILE, "a") as f:
         for e in entries:
@@ -736,8 +750,7 @@ def volume_surge_alerts(name, m, data, now, state, dry):
         return 0
     head = "<b>\U0001f50a Volume-surge alert - NSE (from 09:31: 15m body 80%+, volume 3x+ typical for the time, near day low/high, mostly beyond EMA5/10/20)</b>\n"
     try:
-        for k in range(0, len(out), 25):
-            send(head + "\n".join(x[0] for x in out[k:k + 25]), dry)
+        send_chunks(head, [x[0] for x in out], dry)
         if not dry:
             append_log([x[2] for x in out])
             for x in out:
@@ -848,9 +861,8 @@ def run_cycle(markets, state, force, dry, only):
               f"{len(lines)} alerts, {time.time() - t0:.0f}s")
         if lines:
             try:
-                for k in range(0, len(lines), 40):
-                    head = f"<b>🕯️ Live candle alert - {name} (15m, all EMAs 5/10/20/50/100/200 ascending bull / descending bear, VWAP side)</b>\n"
-                    send(head + "\n".join(lines[k:k + 40]), dry)
+                head = f"<b>🕯️ Live candle alert - {name} (15m, all EMAs 5/10/20/50/100/200 ascending bull / descending bear, VWAP side)</b>\n"
+                send_chunks(head, lines, dry)
                 if not dry:
                     append_log(sent)
             except Exception as e:

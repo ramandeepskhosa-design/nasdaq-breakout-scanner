@@ -247,7 +247,7 @@ def scan(dry=False, force=False):
     lines.append("")
     lines.append("Screen only. Forward test running (oi_scanner.py track).")
     import live_candle_alert as L
-    L.send("\n".join(l for l in lines if l is not None), dry)
+    L.send_chunks("", [l for l in lines if l is not None], dry)
     if not dry:
         append(SIGNALS, ["ts", "symbol", "type", "class", "direction", "oi_pct15", "oi_adj", "px15", "price", "confluence"], sig_rows)
         for sym, (exp, spot, C) in chains.items():

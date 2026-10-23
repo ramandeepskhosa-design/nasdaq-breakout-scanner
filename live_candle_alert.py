@@ -52,7 +52,7 @@ EXT_NEAR_PCT      = 0.30   # close within this % (of price) of the day's low (sh
 EMA_ORDER_PERIODS = (5, 10, 20, 50, 100, 200)   # ALL six EMAs in strict order: BULL = 5>10>20>50>100>200 (ascending), BEAR = 5<10<20<50<100<200 (descending)
 ALERT_KINDS = {"EXTREME"}   # ONLY the single-candle near-day-low/high alert; impulse and no-wick streak alerts are off
 EXT_ALLOW_TWO = False       # two-candle path switched off: a single strong candle (wick <= EXT_WICK_1) is required
-VS_BODY, VS_VOL, VS_NEAR, VS_SHARE, VS_TURNOVER, VS_MIN_CANDLES = 80.0, 3.0, 1.0, 0.80, 1e7, 6   # volume-surge alert (wicks small, volume high for the time, near the day extreme, day beyond EMA5/10/20)
+VS_BODY, VS_VOL, VS_NEAR, VS_SHARE, VS_TURNOVER, VS_MIN_CANDLES = 80.0, 3.0, 1.0, 0.80, 1e7, 1   # volume-surge alert (wicks small, volume high for the time, near the day extreme, day beyond EMA5/10/20)
 EXT_COOLDOWN_MIN = 60     # a stock can re-alert NEAR DAY LOW/HIGH (same direction) after this many minutes
 INDEX_NAMES = {"^NSEI": "NIFTY 50", "^NSEBANK": "BANK NIFTY"}
 INDEX_VOLUME_PROXY = {"^NSEI": "NIFTYBEES.NS", "^NSEBANK": "BANKBEES.NS"}   # Yahoo gives zero volume for the index itself
@@ -634,8 +634,8 @@ def volume_surge_alerts(name, m, data, now, state, dry):
         loc = b.index.tz_convert(tz)
         today = b[loc.strftime("%Y-%m-%d") == loc[-1].strftime("%Y-%m-%d")]
         hm = loc[-1].strftime("%H:%M")
-        if len(today) < VS_MIN_CANDLES or hm in (m.get("first_bar") and f"{m['first_bar'][0]:02d}:{m['first_bar'][1]:02d}", f"{m['last_bar'][0]:02d}:{m['last_bar'][1]:02d}"):
-            continue
+        if len(today) < VS_MIN_CANDLES or hm == f"{m['last_bar'][0]:02d}:{m['last_bar'][1]:02d}":
+            continue        # alerts start with the 09:15 candle (sent ~09:31); only the closing-drift candle is skipped
         r = today.iloc[-1]
         rng = float(r.High - r.Low)
         if rng <= 0 or abs(r.Close - r.Open) / rng * 100 < VS_BODY or float(r.Volume) * float(r.Close) < VS_TURNOVER:
@@ -680,7 +680,8 @@ def volume_surge_alerts(name, m, data, now, state, dry):
         e5, e10, e20 = (b.Close.ewm(span=p, adjust=False).mean() for p in (5, 10, 20))
         tl = loc.strftime("%Y-%m-%d") == day
         beyond = ((b.Close < e5) & (b.Close < e10) & (b.Close < e20)) if d == "bear" else ((b.Close > e5) & (b.Close > e10) & (b.Close > e20))
-        share = float(beyond[tl].mean())
+        ntoday = int(tl.sum())
+        share = float(beyond[tl].mean()) if ntoday >= 6 else float(beyond.iloc[-12:].mean())   # early in the day: last 12 candles (incl. yesterday's close)
         vr = slot_volume_ratio(ldf, bar_ts, m["tz"])
         if share < VS_SHARE or vr is None or vr < VS_VOL:
             continue
@@ -728,11 +729,12 @@ def volume_surge_alerts(name, m, data, now, state, dry):
         icon = "\U0001f534" if d == "bear" else "\U0001f7e2"
         out.append((f"{icon} <b>{sym}</b> {m['cur']}{float(r.Close):,.2f}  VOLUME SURGE {'SHORT side' if d == 'bear' else 'LONG side'} - 15m {loc[-1].strftime('%H:%M')} body {abs(r.Close - r.Open) / rng * 100:.0f}% "
                     f"(wicks {up:.0f}/{lo:.0f}%), volume {vr:.1f}x typical for this time (Rs {float(r.Volume) * float(r.Close) / 1e7:.1f} cr), {near:.2f}% from day {'low' if d == 'bear' else 'high'}, "
-                    f"{share * 100:.0f}% of today's candles {'below' if d == 'bear' else 'above'} EMA5/10/20{vnote}{nn}{five_note}{oi}",
+                    f"{share * 100:.0f}% of {'today' + chr(39) + 's candles' if ntoday >= 6 else 'the last 12 candles'} {'below' if d == 'bear' else 'above'} EMA5/10/20{vnote}{nn}"
+                    f"{' | EARLY SESSION: before 10:45 these faded in the 59-day test (1h -0.14% to -0.16%)' if loc[-1].strftime('%H:%M') < '10:45' else ''}{five_note}{oi}",
                     key, dict(ts=now.isoformat(), market=name, date=day, bar=bar_ts, t=t, sym=sym, kind="VOLSURGE", dir=d, px=float(r.Close))))
     if not out:
         return 0
-    head = "<b>\U0001f50a Volume-surge alert - NSE (15m body 80%+, volume 3x+ typical for the time, near day low/high, day beyond EMA5/10/20)</b>\n"
+    head = "<b>\U0001f50a Volume-surge alert - NSE (from 09:31: 15m body 80%+, volume 3x+ typical for the time, near day low/high, mostly beyond EMA5/10/20)</b>\n"
     try:
         for k in range(0, len(out), 25):
             send(head + "\n".join(x[0] for x in out[k:k + 25]), dry)

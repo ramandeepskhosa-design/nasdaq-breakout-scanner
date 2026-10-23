@@ -184,7 +184,15 @@ def scan(dry=False, force=False):
     if st.get("slot") == slot and not force:
         print("already scanned", slot)
         return
-    sess = S.session()
+    for attempt in range(3):
+        try:
+            sess = S.session()
+            break
+        except Exception as e:
+            if attempt == 2:
+                raise
+            print("NSE session failed, retrying:", str(e)[:80])
+            time.sleep(20)
     cur = get_spurts(sess)
     prev, prev_t = prev_snapshot(now.replace(tzinfo=None) if False else now)
     if not dry:
@@ -205,7 +213,8 @@ def scan(dry=False, force=False):
     trig = stocks[(stocks.adj.abs() >= OI_PCT) & (stocks.px.abs() >= MIN_PX)].copy()
     done = st.get("cool", {})
     day = now.strftime("%Y-%m-%d")
-    trig = trig[[(day + "|" + s) not in done or (time.time() - done[day + "|" + s]) > COOLDOWN_MIN * 60 for s in trig.index]]
+    ok = pd.Series([(day + "|" + s) not in done or (time.time() - done[day + "|" + s]) > COOLDOWN_MIN * 60 for s in trig.index], index=trig.index, dtype=bool)
+    trig = trig[ok]
     trig["abs"] = trig.adj.abs()
     trig = trig.sort_values("abs", ascending=False)
     idx_txt = "; ".join(f"{k} OI {D.loc[k, 'pct']:+.1f}% price {D.loc[k, 'px']:+.2f}%" for k in ("NIFTY", "BANKNIFTY") if k in D.index)

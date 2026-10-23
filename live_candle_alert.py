@@ -50,7 +50,8 @@ NW_STREAK        = 3
 # "Near day low/high" alert: price sits at the day's extreme after small-closing-wick candles.
 EXT_NEAR_PCT      = 0.30   # close within this % (of price) of the day's low (short) / high (long)
 EMA_ORDER_PERIODS = (5, 10, 20, 50, 100, 200)   # ALL six EMAs in strict order: BULL = 5>10>20>50>100>200 (ascending), BEAR = 5<10<20<50<100<200 (descending)
-ALERT_KINDS = {"EXTREME"}   # ONLY the single-candle near-day-low/high alert; impulse and no-wick streak alerts are off
+OLD_ALERTS = False   # 23 Oct: near-extreme and volume-surge candle alerts replaced by session_scan.py range scans; set True to bring them back
+ALERT_KINDS = {"EXTREME"} if OLD_ALERTS else set()
 EXT_ALLOW_TWO = False       # two-candle path switched off: a single strong candle (wick <= EXT_WICK_1) is required
 VS_BODY, VS_VOL, VS_NEAR, VS_SHARE, VS_TURNOVER, VS_MIN_CANDLES = 80.0, 3.0, 1.0, 0.80, 1e7, 1   # volume-surge alert (wicks small, volume high for the time, near the day extreme, day beyond EMA5/10/20)
 EXT_COOLDOWN_MIN = 60     # a stock can re-alert NEAR DAY LOW/HIGH (same direction) after this many minutes
@@ -874,8 +875,12 @@ def run_cycle(markets, state, force, dry, only):
             try:
                 global oi_ctx_global
                 oi_ctx_global = oi_ctx if pending else {}
-                n_vs = volume_surge_alerts(name, m, data, now, state, dry)
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] {name}: {n_vs} volume-surge alerts")
+                if OLD_ALERTS:
+                    n_vs = volume_surge_alerts(name, m, data, now, state, dry)
+                    print(f"[{datetime.now().strftime('%H:%M:%S')}] {name}: {n_vs} volume-surge alerts")
+                import session_scan
+                n_rs = session_scan.scan(sys.modules[__name__], data, now, state, dry)
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] {name}: {n_rs} range-scan alerts")
             except Exception as e:
                 print("volume-surge check failed:", str(e)[:120])
         if not dry:

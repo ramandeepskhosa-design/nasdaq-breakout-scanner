@@ -52,6 +52,7 @@ EXT_NEAR_PCT      = 0.30   # close within this % (of price) of the day's low (sh
 EMA_ORDER_PERIODS = (5, 10, 20, 50, 100, 200)   # ALL six EMAs in strict order: BULL = 5>10>20>50>100>200 (ascending), BEAR = 5<10<20<50<100<200 (descending)
 ALERT_KINDS = {"EXTREME"}   # ONLY the single-candle near-day-low/high alert; impulse and no-wick streak alerts are off
 EXT_ALLOW_TWO = False       # two-candle path switched off: a single strong candle (wick <= EXT_WICK_1) is required
+VS_BODY, VS_VOL, VS_NEAR, VS_SHARE, VS_TURNOVER, VS_MIN_CANDLES = 80.0, 3.0, 1.0, 0.80, 1e7, 6   # volume-surge alert (wicks small, volume high for the time, near the day extreme, day beyond EMA5/10/20)
 EXT_COOLDOWN_MIN = 60     # a stock can re-alert NEAR DAY LOW/HIGH (same direction) after this many minutes
 INDEX_NAMES = {"^NSEI": "NIFTY 50", "^NSEBANK": "BANK NIFTY"}
 INDEX_VOLUME_PROXY = {"^NSEI": "NIFTYBEES.NS", "^NSEBANK": "BANKBEES.NS"}   # Yahoo gives zero volume for the index itself
@@ -363,6 +364,8 @@ def read_log(market, day):
 
 
 def kind_label(kind, d):
+    if kind == "VOLSURGE":
+        return "VOLUME SURGE"
     if kind == "EXTREME":
         return "NEAR DAY LOW" if d == "bear" else "NEAR DAY HIGH"
     return "IMPULSE" if kind == "IMPULSE" else "NO-WICK"
@@ -618,6 +621,133 @@ def order_book_note(ticker, direction):
         return ""
 
 
+def volume_surge_alerts(name, m, data, now, state, dry):
+    """Second alert type (NSE): a 15m candle with body >= VS_BODY% (small wicks) on volume >= VS_VOL x the typical volume of that
+    time of day, within VS_NEAR% of the day's low (red) / high (green), in a stock that spent >= VS_SHARE of today's candles beyond
+    EMA5/10/20 on the 15m chart. The 5-minute bars of the candle are checked for where the volume came in. Sent after the 15m close."""
+    tz = ZoneInfo(m["tz"])
+    cands = []
+    for t, df in data.items():
+        b = completed(df, now)
+        if len(b) < 10:
+            continue
+        loc = b.index.tz_convert(tz)
+        today = b[loc.strftime("%Y-%m-%d") == loc[-1].strftime("%Y-%m-%d")]
+        hm = loc[-1].strftime("%H:%M")
+        if len(today) < VS_MIN_CANDLES or hm in (m.get("first_bar") and f"{m['first_bar'][0]:02d}:{m['first_bar'][1]:02d}", f"{m['last_bar'][0]:02d}:{m['last_bar'][1]:02d}"):
+            continue
+        r = today.iloc[-1]
+        rng = float(r.High - r.Low)
+        if rng <= 0 or abs(r.Close - r.Open) / rng * 100 < VS_BODY or float(r.Volume) * float(r.Close) < VS_TURNOVER:
+            continue
+        d = "bear" if r.Close < r.Open else "bull"
+        near = (r.Close / today.Low.min() - 1) * 100 if d == "bear" else (today.High.max() / r.Close - 1) * 100
+        if near > VS_NEAR:
+            continue
+        prev_slot = b[(loc.strftime("%H:%M") == hm) & (loc.strftime("%Y-%m-%d") < loc[-1].strftime("%Y-%m-%d"))].Volume.tail(1)
+        if len(prev_slot) and prev_slot.iloc[0] > 0 and float(r.Volume) / float(prev_slot.iloc[0]) < 1.5:
+            continue
+        cands.append((t, d, near, float(r.Volume) * float(r.Close)))
+    if not cands:
+        return 0
+    cands = sorted(cands, key=lambda x: -x[3])[:40]
+    global oi_ctx_global
+    if not oi_ctx_global and name == "NSE":
+        oi_ctx_global = oi_context(now.astimezone(tz))
+    long_data = fetch([c[0] for c in cands], period="30d")
+    nchg = nifty_change_from_open(now) if name == "NSE" else None
+    five = {}
+    try:
+        import yfinance as _yf
+        f5 = _yf.download([c[0] for c in cands], period="5d", interval="5m", group_by="ticker", progress=False, auto_adjust=False, threads=False)
+        for c in cands:
+            try:
+                five[c[0]] = flatten(f5[c[0]] if len(cands) > 1 else f5).dropna(subset=["Close"])
+            except Exception:
+                pass
+    except Exception:
+        pass
+    out = []
+    for t, d, near, _ in cands:
+        ldf = long_data.get(t)
+        if ldf is None:
+            continue
+        b = completed(ldf, now)
+        loc = b.index.tz_convert(tz)
+        day = loc[-1].strftime("%Y-%m-%d")
+        bar_ts = str(b.index[-1])
+        today = b[loc.strftime("%Y-%m-%d") == day]
+        e5, e10, e20 = (b.Close.ewm(span=p, adjust=False).mean() for p in (5, 10, 20))
+        tl = loc.strftime("%Y-%m-%d") == day
+        beyond = ((b.Close < e5) & (b.Close < e10) & (b.Close < e20)) if d == "bear" else ((b.Close > e5) & (b.Close > e10) & (b.Close > e20))
+        share = float(beyond[tl].mean())
+        vr = slot_volume_ratio(ldf, bar_ts, m["tz"])
+        if share < VS_SHARE or vr is None or vr < VS_VOL:
+            continue
+        key = f"{t}|{day}|VOLSURGE|{d}"
+        if key in state:
+            try:
+                if (now - datetime.fromisoformat(state[key])).total_seconds() < EXT_COOLDOWN_MIN * 60:
+                    continue
+            except Exception:
+                continue
+        r = today.iloc[-1]
+        rng = float(r.High - r.Low)
+        up = (r.High - max(r.Open, r.Close)) / rng * 100
+        lo = (min(r.Open, r.Close) - r.Low) / rng * 100
+        sym = t.replace(".NS", "")
+        five_note = ""
+        f = five.get(t)
+        if f is not None and len(f):
+            f = f.copy()
+            f.index = f.index.tz_convert(tz)
+            t0 = b.index[-1].tz_convert(tz)
+            w = f[(f.index >= t0) & (f.index < t0 + timedelta(minutes=15))]
+            if len(w):
+                hist = f[f.index.strftime("%Y-%m-%d") < day]
+                typ = hist.groupby(hist.index.strftime("%H:%M")).Volume.mean()
+                best, bx = None, 0
+                for ts5, r5 in w.iterrows():
+                    base = typ.get(ts5.strftime("%H:%M"), 0)
+                    x = float(r5.Volume) / base if base > 0 else 0
+                    if x > bx:
+                        best, bx = (ts5, r5), x
+                if best is not None:
+                    ts5, r5 = best
+                    share5 = float(r5.Volume) / max(float(w.Volume.sum()), 1) * 100
+                    five_note = f"\n    5m chart: peak bar {ts5.strftime('%H:%M')} {'red' if r5.Close < r5.Open else 'green'} on {bx:.1f}x typical for that 5 minutes ({share5:.0f}% of the candle's volume)"
+        vw = vwap_at(ldf, bar_ts, m["tz"]) if m.get("need_vwap") else None
+        vnote = f" | {'below' if r.Close < vw else 'above'} VWAP" if vw else ""
+        dchg = 0.0
+        try:
+            dchg = (float(r.Close) / float(b.Close[loc.strftime("%Y-%m-%d") < day].iloc[-1]) - 1) * 100
+        except Exception:
+            pass
+        oi = oi_note(sym, d, dchg, oi_ctx_global) if oi_ctx_global else ""
+        nn = f" | Nifty {nchg:+.2f}% today" if nchg is not None else ""
+        icon = "\U0001f534" if d == "bear" else "\U0001f7e2"
+        out.append((f"{icon} <b>{sym}</b> {m['cur']}{float(r.Close):,.2f}  VOLUME SURGE {'SHORT side' if d == 'bear' else 'LONG side'} - 15m {loc[-1].strftime('%H:%M')} body {abs(r.Close - r.Open) / rng * 100:.0f}% "
+                    f"(wicks {up:.0f}/{lo:.0f}%), volume {vr:.1f}x typical for this time (Rs {float(r.Volume) * float(r.Close) / 1e7:.1f} cr), {near:.2f}% from day {'low' if d == 'bear' else 'high'}, "
+                    f"{share * 100:.0f}% of today's candles {'below' if d == 'bear' else 'above'} EMA5/10/20{vnote}{nn}{five_note}{oi}",
+                    key, dict(ts=now.isoformat(), market=name, date=day, bar=bar_ts, t=t, sym=sym, kind="VOLSURGE", dir=d, px=float(r.Close))))
+    if not out:
+        return 0
+    head = "<b>\U0001f50a Volume-surge alert - NSE (15m body 80%+, volume 3x+ typical for the time, near day low/high, day beyond EMA5/10/20)</b>\n"
+    try:
+        for k in range(0, len(out), 25):
+            send(head + "\n".join(x[0] for x in out[k:k + 25]), dry)
+        if not dry:
+            append_log([x[2] for x in out])
+            for x in out:
+                state[x[1]] = now.isoformat()
+    except Exception as e:
+        print("VOLUME SURGE SEND FAILED:", e)
+    return len(out)
+
+
+oi_ctx_global = {}
+
+
 def run_cycle(markets, state, force, dry, only):
     now = datetime.now(timezone.utc)
     for name, m in markets.items():
@@ -726,6 +856,14 @@ def run_cycle(markets, state, force, dry, only):
                 print(f"ALERT SEND FAILED for {name}: {e}")
                 for key in new_keys:
                     state.pop(key, None)
+        if name == "NSE":
+            try:
+                global oi_ctx_global
+                oi_ctx_global = oi_ctx if pending else {}
+                n_vs = volume_surge_alerts(name, m, data, now, state, dry)
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] {name}: {n_vs} volume-surge alerts")
+            except Exception as e:
+                print("volume-surge check failed:", str(e)[:120])
         if not dry:
             maybe_report(name, m, now, state, data, dry)
 

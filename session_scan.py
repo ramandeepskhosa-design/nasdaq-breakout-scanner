@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 """Opening-range and range-breakout scans for NSE F&O stocks (replaces the old near-extreme / volume-surge candle alerts).
 
-MORNING (candle in the upper/lower part of the range that came before it, sent right after the candle closes):
-  09:46  range = 09:15-09:30 ;  candle 09:30-09:45
-  10:16  range = 09:15-10:00 ;  candle 10:00-10:15
-  The candle must close in the top 25% of the range (or above it) and be GREEN with body > 60% (bull), or close in the
-  bottom 25% (or below it) and be RED with body > 60% (bear).
+MORNING (sent 09:46, 10:01, 10:16, 10:31, 10:46 - every 15 minutes up to 11:00):
+  Opening range = the 09:15-09:30 candle. The candle that just closed (09:30, 09:45, 10:00, 10:15, 10:30) must be a NO-WICK
+  candle (body >= 80%, each wick <= 10%) that closes beyond the opening-range high (bull, green) or low (bear, red).
+  From the 10:00 candle on, a no-wick candle that closes within 0.25% short of the range edge is also listed as NEAR.
+  Sorted by total wick, smallest first.
 AFTERNOON (breakout of the range since 10:00):
   11:16, 12:16, 13:16, 14:16, 15:16 ;  range = 10:00 up to the start of the candle ; candle = the 15m candle just closed
   The candle must close above the range high (bull) / below the range low (bear), body >= 70%, volume >= 2x normal for the slot.
-Each message is sorted from the strongest to the weakest buy/sell pressure in the direction of the signal. The NSE order
-book cannot be read by a script (blocked), so the pressure is measured from the volume of the up vs down 5-minute bars
-inside the signal candle.
+Afternoon messages are sorted by buy/sell pressure in the signal direction (volume of up vs down 5-minute bars inside the
+candle; the NSE order book cannot be read by a script).
 """
 import numpy as np
 import pandas as pd
@@ -20,11 +19,15 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 IST = "Asia/Kolkata"
-MORNING = {"09:30": ("09:15", "09:30"), "10:00": ("09:15", "10:00")}      # candle start -> (range start, range end)
+MORNING = {st: ("09:15", "09:30") for st in ("09:30", "09:45", "10:00", "10:15", "10:30")}   # candle start -> (range start, range end): always the opening 15 minutes
+NEAR_FROM = "10:00"      # from this candle on, a no-wick candle that closes just short of the opening range also counts (NEAR)
+NEAR_PCT = 0.25          # "near" = closes within this % of the opening-range edge
+WICK_MAX = 10.0          # each wick <= 10% of the candle range
+BODY_AM = 80.0
 AFTERNOON = ("11:00", "12:00", "13:00", "14:00", "15:00")
 RANGE_START_PM = "10:00"
 ZONE = 0.25
-BODY_AM, BODY_PM = 60.0, 70.0
+BODY_PM = 70.0
 VOL_PM = 2.0
 MIN_RANGE_PCT = 0.15
 MAX_AGE_MIN = 35
@@ -90,9 +93,17 @@ def scan(H, data, now, state, dry):
             body = abs(cl - o) / max(h - l, 1e-9) * 100
             if body < body_min:
                 continue
+            upw = (h - max(o, cl)) / max(h - l, 1e-9) * 100
+            low_w = (min(o, cl) - l) / max(h - l, 1e-9) * 100
+            if am and (upw > WICK_MAX or low_w > WICK_MAX):
+                continue
             pos = (cl - lo) / (hi - lo)
+            near = False
             if am:
-                bull, bear = cl > o and pos >= 1 - ZONE, cl < o and pos <= ZONE
+                nz = NEAR_PCT / 100 if start >= NEAR_FROM else 0.0
+                bull = cl > o and cl >= hi * (1 - nz)
+                bear = cl < o and cl <= lo * (1 + nz)
+                near = (bull and cl <= hi) or (bear and cl >= lo)
             else:
                 bull, bear = cl > o and cl > hi, cl < o and cl < lo
             if not (bull or bear):
@@ -101,7 +112,7 @@ def scan(H, data, now, state, dry):
             key = f"RNG|{t}|{day}|{start}|{dr}"
             if key in state:
                 continue
-            cands.append(dict(t=t, start=start, dir=dr, am=am, hi=hi, lo=lo, pos=pos, body=body, px=cl, bar=c.name,
+            cands.append(dict(t=t, start=start, dir=dr, am=am, near=near, wick=upw + low_w, upw=upw, low_w=low_w, hi=hi, lo=lo, pos=pos, body=body, px=cl, bar=c.name,
                               day=day, prev=float(d[d.day < day].Close.iloc[-1]) if (d.day < day).any() else None))
             keys.append(key)
     if not cands:
@@ -128,23 +139,27 @@ def scan(H, data, now, state, dry):
         by.setdefault(p["start"], []).append(p)
     messages = []
     for start, grp in sorted(by.items()):
-        grp.sort(key=lambda p: (p["score"], (p["vx"] or 0) * p["body"]), reverse=True)
+        grp.sort(key=(lambda p: (p["wick"], -p["score"])) if start in MORNING else (lambda p: (-p["score"], -(p["vx"] or 0) * p["body"])))
         total, grp = len(grp), grp[:TOP_N]
         if start in MORNING:
             r0, r1 = MORNING[start]
-            title = f"Range {r0}-{r1} -> candle {start} closed in the upper/lower part"
+            title = f"opening range {r0}-{r1}, no-wick candle {start}-{(datetime.strptime(start, '%H:%M') + timedelta(minutes=15)).strftime('%H:%M')} (least wick first)"
         else:
             title = f"10:00-{start} range breakout, candle {start}"
-        head = f"<b>📐 Range scan - {title}</b>\nSorted: strongest buy/sell pressure first (volume of up vs down 5-minute bars; the NSE order book is not readable by scripts).\n"
+        srt = "Sorted: smallest wicks first." if start in MORNING else "Sorted: strongest buy/sell pressure first (volume of up vs down 5-minute bars; the NSE order book is not readable by scripts)."
+        head = f"<b>📐 Range scan - {title}</b>\n{srt}\n"
         lines = []
         for p in grp:
             sym = p["t"].replace(".NS", "")
             icon = "🟢" if p["dir"] == "bull" else "🔴"
             what = "LONG" if p["dir"] == "bull" else "SHORT"
-            where = (("closed above the range high" if p["pos"] > 1 else "closed below the range low" if p["pos"] < 0 else
-                      f"closed in the {'top' if p['dir'] == 'bull' else 'bottom'} {(1 - p['pos'] if p['dir'] == 'bull' else p['pos']) * 100:.0f}% of the range")
-                     + f" {p['lo']:,.2f}-{p['hi']:,.2f}" if p["am"] else
-                     ("above" if p["dir"] == "bull" else "below") + f" the range {p['lo']:,.2f}-{p['hi']:,.2f}")
+            if p["am"]:
+                edge = p["hi"] if p["dir"] == "bull" else p["lo"]
+                gap = abs(p["px"] / edge - 1) * 100
+                where = (f"NEAR opening-range {'high' if p['dir'] == 'bull' else 'low'} {edge:,.2f} ({gap:.2f}% short of it)" if p["near"] else
+                         f"BROKE opening-range {'high' if p['dir'] == 'bull' else 'low'} {edge:,.2f} (by {gap:.2f}%)") + f", wicks up {p['upw']:.0f}% / down {p['low_w']:.0f}%"
+            else:
+                where = ("above" if p["dir"] == "bull" else "below") + f" the range {p['lo']:,.2f}-{p['hi']:,.2f}"
             tilt = f"{p['tilt']:+.0f}% {'buy' if p['tilt'] > 0 else 'sell'} pressure" if p["tilt"] is not None else "pressure n/a"
             vol = f" | volume {p['vx']:.1f}x normal" if p["vx"] else ""
             dchg = (p["px"] / p["prev"] - 1) * 100 if p["prev"] else 0.0
@@ -153,7 +168,7 @@ def scan(H, data, now, state, dry):
             sent.append({"ts": now.isoformat(), "market": "NSE", "date": p["day"], "bar": str(p["bar"]), "t": p["t"], "sym": sym,
                          "kind": "RANGE", "dir": p["dir"], "px": p["px"]})
         if total > len(grp):
-            lines.append(f"... and {total - len(grp)} more passed the rule (weaker pressure) - not listed")
+            lines.append(f"... and {total - len(grp)} more passed the rule - not listed")
         messages.append((head, lines))
     try:
         for head, lines in messages:

@@ -4,7 +4,7 @@
 MORNING (sent 09:46, 10:01, 10:16, 10:31, 10:46 - every 15 minutes up to 11:00):
   Opening range = the 09:15-09:30 candle. The candle that just closed (09:30, 09:45, 10:00, 10:15, 10:30) must be a NO-WICK
   candle (body >= 80%, each wick <= 10%) that closes beyond the opening-range high (bull, green) or low (bear, red).
-  From the 10:00 candle on, a no-wick candle that closes within 0.25% short of the range edge is also listed as NEAR.
+  From the 09:30 candle on (including the 09:46 alert), a no-wick candle that closes within 0.25% short of the range edge is also listed as NEAR.
   Sorted by total wick, smallest first.
 AFTERNOON (breakout of the range since 10:00):
   11:16, 12:16, 13:16, 14:16, 15:16 ;  range = 10:00 up to the start of the candle ; candle = the 15m candle just closed
@@ -20,7 +20,7 @@ from zoneinfo import ZoneInfo
 
 IST = "Asia/Kolkata"
 MORNING = {st: ("09:15", "09:30") for st in ("09:30", "09:45", "10:00", "10:15", "10:30")}   # candle start -> (range start, range end): always the opening 15 minutes
-NEAR_FROM = "10:00"      # from this candle on, a no-wick candle that closes just short of the opening range also counts (NEAR)
+NEAR_FROM = "09:30"      # near-breakout counts from the first candle on (09:46 alert included)
 NEAR_PCT = 0.25          # "near" = closes within this % of the opening-range edge
 WICK_MAX = 10.0          # each wick <= 10% of the candle range
 BODY_AM = 80.0

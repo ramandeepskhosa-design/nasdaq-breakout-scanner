@@ -314,6 +314,7 @@ def save_state(state):
     json.dump(state, open(STATE_FILE, "w"))
 
 
+_ALLOW = False   # set True by the two scans in candle_scan.py: they are the only alerts that stay on while learning/ALERTS_OFF exists
 ALERTS_OFF_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "learning", "ALERTS_OFF")   # create this file = every Telegram alert is muted; delete it = alerts back
 
 
@@ -321,7 +322,7 @@ def send(text, dry):
     if dry:
         print(text)
         return
-    if os.path.exists(ALERTS_OFF_FILE):
+    if os.path.exists(ALERTS_OFF_FILE) and not _ALLOW:
         print("ALERTS OFF (learning/ALERTS_OFF exists) - not sent:", text[:80].replace("\n", " "))
         return
     url = f"https://api.telegram.org/bot{os.environ['TELEGRAM_BOT_TOKEN']}/sendMessage"
@@ -884,9 +885,9 @@ def run_cycle(markets, state, force, dry, only):
                 if OLD_ALERTS:
                     n_vs = volume_surge_alerts(name, m, data, now, state, dry)
                     print(f"[{datetime.now().strftime('%H:%M:%S')}] {name}: {n_vs} volume-surge alerts")
-                import session_scan
-                n_rs = session_scan.scan(sys.modules[__name__], data, now, state, dry)
-                print(f"[{datetime.now().strftime('%H:%M:%S')}] {name}: {n_rs} range-scan alerts")
+                import candle_scan
+                n_rs = candle_scan.scan15(sys.modules[__name__], data, now, state, dry)
+                print(f"[{datetime.now().strftime('%H:%M:%S')}] {name}: {n_rs} 15-minute trend-candle alerts")
             except Exception as e:
                 print("volume-surge check failed:", str(e)[:120])
         if not dry:

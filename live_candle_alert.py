@@ -314,9 +314,15 @@ def save_state(state):
     json.dump(state, open(STATE_FILE, "w"))
 
 
+ALERTS_OFF_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "learning", "ALERTS_OFF")   # create this file = every Telegram alert is muted; delete it = alerts back
+
+
 def send(text, dry):
     if dry:
         print(text)
+        return
+    if os.path.exists(ALERTS_OFF_FILE):
+        print("ALERTS OFF (learning/ALERTS_OFF exists) - not sent:", text[:80].replace("\n", " "))
         return
     url = f"https://api.telegram.org/bot{os.environ['TELEGRAM_BOT_TOKEN']}/sendMessage"
 

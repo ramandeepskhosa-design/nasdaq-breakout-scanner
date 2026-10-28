@@ -14,6 +14,8 @@ import live_candle_alert as L  # noqa: E402
 text = " ".join(sys.argv[1:]).strip()
 if not text:
     sys.exit("no text")
+if os.path.exists(L.ALERTS_OFF_FILE):
+    sys.exit("alerts are off (learning/ALERTS_OFF exists) - note not sent")
 # plain text on purpose: agent notes often contain < > characters that break Telegram's HTML mode
 import urllib.parse, urllib.request  # noqa: E402,E401
 url = f"https://api.telegram.org/bot{os.environ['TELEGRAM_BOT_TOKEN']}/sendMessage"

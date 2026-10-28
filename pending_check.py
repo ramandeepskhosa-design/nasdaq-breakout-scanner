@@ -137,6 +137,8 @@ def pending():
 
 
 def notify(items, D):
+    if os.path.exists(os.path.join(LEARN, "ALERTS_OFF")):
+        return
     try:
         st = json.load(open(NOTE_STATE))
     except Exception:

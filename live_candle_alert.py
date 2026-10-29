@@ -331,7 +331,17 @@ def send(text, dry):
         fields = {"chat_id": os.environ["TELEGRAM_CHAT_ID"], "text": body}
         if parse_mode:
             fields["parse_mode"] = parse_mode
-        urllib.request.urlopen(urllib.request.Request(url, data=urllib.parse.urlencode(fields).encode(), method="POST"), timeout=15)
+        for attempt in range(4):          # slow network / TLS handshake timeouts: retry before giving up
+            try:
+                urllib.request.urlopen(urllib.request.Request(url, data=urllib.parse.urlencode(fields).encode(), method="POST"), timeout=25)
+                return
+            except urllib.error.HTTPError:
+                raise
+            except Exception as e:
+                if attempt == 3:
+                    raise
+                print("telegram send retry:", str(e)[:80])
+                time.sleep(4 * (attempt + 1))
 
     try:
         post(text, "HTML")

@@ -37,27 +37,39 @@ def _load(H, ticks):
 def minute_scan(dry=False):
     import live_candle_alert as H
     now = datetime.now(ZoneInfo(IST))
-    # the candle that just closed opened 1 minute ago; match it to a start slot
-    want = (now - timedelta(minutes=1)).strftime("%H:%M")
+    # launchd can start late (sleep/wake): pick the latest scan slot whose 1-minute candle closed within the last 6 minutes
+    want = None
+    for st in MINUTE_STARTS:
+        closes = datetime.strptime(now.strftime("%Y-%m-%d ") + st, "%Y-%m-%d %H:%M").replace(tzinfo=now.tzinfo) + timedelta(minutes=1)
+        if timedelta(0) <= now - closes <= timedelta(minutes=6):
+            want = st
     if len(sys.argv) > 3:
         want = sys.argv[3]
     if want not in MINUTE_STARTS:
-        print("not a scan minute:", want)
+        print("not a scan minute:", now.strftime("%H:%M"))
         return
     day = now.strftime("%Y-%m-%d")
     if len(sys.argv) > 2 and sys.argv[2] != "now":
         day = sys.argv[2]
     ticks = list(H.load_markets()["NSE"]["tickers"])
-    # candle opened at `want`; wait for Yahoo to publish it (it lags 20-60 s)
+    # candle opened at `want`; Yahoo publishes it 20-60 s late and rate-limits bursts, so keep retrying the tickers still missing
+    import os
+    cache = os.path.join(os.path.dirname(os.path.abspath(__file__)), "learning", "yf_cache")
+    os.makedirs(cache, exist_ok=True)
+    try:
+        yf.set_tz_cache_location(cache)
+    except Exception:
+        pass
     rows = {}
-    deadline = time.time() + 100
+    deadline = time.time() + 150
     while time.time() < deadline:
-        rows = {}
-        for i in range(0, len(ticks), 60):
-            part = ticks[i:i + 60]
+        missing = [t for t in ticks if t not in rows]
+        for i in range(0, len(missing), 40):
+            part = missing[i:i + 40]
             try:
-                d = yf.download(part, period=("1d" if day == now.strftime("%Y-%m-%d") else "5d"), interval="1m", group_by="ticker", threads=True, progress=False, auto_adjust=False)
+                d = yf.download(part, period=("1d" if day == now.strftime("%Y-%m-%d") else "5d"), interval="1m", group_by="ticker", threads=False, progress=False, auto_adjust=False)
             except Exception:
+                time.sleep(3)
                 continue
             for t in part:
                 try:
@@ -68,9 +80,9 @@ def minute_scan(dry=False):
                         rows[t] = (c.iloc[0], df)
                 except Exception:
                     pass
-        if len(rows) > 0.6 * len(ticks) or day != now.strftime("%Y-%m-%d"):
+        if len(rows) >= 0.9 * len(ticks) or day != now.strftime("%Y-%m-%d"):
             break
-        time.sleep(10)
+        time.sleep(8)
     out = []
     for t, (c, df) in rows.items():
         o, h, l, cl = float(c.Open), float(c.High), float(c.Low), float(c.Close)

@@ -67,7 +67,7 @@ def minute_scan(dry=False):
         for i in range(0, len(missing), 40):
             part = missing[i:i + 40]
             try:
-                d = yf.download(part, period=("1d" if day == now.strftime("%Y-%m-%d") else "5d"), interval="1m", group_by="ticker", threads=False, progress=False, auto_adjust=False)
+                d = yf.download(part, period=("1d" if day == now.strftime("%Y-%m-%d") else "5d"), interval="1m", group_by="ticker", threads=True, progress=False, auto_adjust=False)
             except Exception:
                 time.sleep(3)
                 continue

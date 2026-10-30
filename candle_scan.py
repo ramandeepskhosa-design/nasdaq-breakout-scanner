@@ -10,7 +10,7 @@ PART 1 - 1-minute no-wick scan (python3 candle_scan.py minute), run by launchd a
 PART 2 - 15-minute EMA-pullback candles (called from live_candle_alert.run_cycle at :01/:16/:31/:46), candles 09:15 to 15:00:
     bull: EMA20>50>100>200, green candle, lower wick <= 7%, low touches/near EMA5 or EMA9, volume >= 1.2x normal
     bear: EMA20<50<100<200, red candle, upper wick <= 7%, high touches/near EMA5 or EMA9, volume >= 1.2x normal
-  both: body >= 40% and the far-side wick <= 30%
+  either wick condition is enough: trend-side wick <= 7% OR the other wick <= 7% (closes near the high for green, near the low for red); body >= 40%
   First alert ~09:31 (the 09:15 candle), then every 15 minutes.
 """
 import sys
@@ -24,7 +24,7 @@ import yfinance as yf
 IST = "Asia/Kolkata"
 MIN_BODY_1M, MIN_MOVE_1M, WICK_TOL = 60.0, 0.20, 2.0     # 1-minute scan: body %, move %, "no wick" = wick <= 2% of the range
 VOL_MIN, MAX_WICK, NEAR_PCT = 1.2, 7.0, 0.15     # 15m scan: volume x normal, wick % of range, "near EMA" = within 0.15% of price
-MIN_BODY, MAX_OPP_WICK = 40.0, 30.0     # 15m scan: body >= 40% of range, wick on the far side <= 30%
+MIN_BODY = 40.0     # 15m scan: body >= 40% of range
 FIRST_15M = "09:15"
 LAST_15M = "15:00"
 MIN_RANGE_15M = 0.20     # % - ignore tiny candles
@@ -173,7 +173,7 @@ def scan15(H, data, now, state, dry):
                 wick = (h - max(o, cl)) / r * 100
                 opp = (min(o, cl) - l) / r * 100
                 dist = min(abs(h - e5) / e5, abs(h - e9) / e9) * 100 if not (l <= e5 <= h or l <= e9 <= h) else 0.0
-            if wick > MAX_WICK or opp > MAX_OPP_WICK or abs(cl - o) / r * 100 < MIN_BODY or dist > NEAR_PCT:
+            if (wick > MAX_WICK and opp > MAX_WICK) or abs(cl - o) / r * 100 < MIN_BODY or dist > NEAR_PCT:
                 continue
             vx = H.slot_volume_ratio(d, d.index[k])
             if vx is None or vx < VOL_MIN:
@@ -181,7 +181,9 @@ def scan15(H, data, now, state, dry):
             key = f"C15|{t}|{day}|{st}|{col}"
             if key in state:
                 continue
-            rule = f"EMA {'20 above 50 above 100 above 200' if col == 'bull' else '20 below 50 below 100 below 200'}, body {abs(cl - o) / r * 100:.0f}%, {'lower' if col == 'bull' else 'upper'} wick {wick:.0f}%, {'touched' if dist == 0 else f'{dist:.2f}% from'} EMA5/9, volume {vx:.1f}x"
+            lw, uw = (wick, opp) if col == "bull" else (opp, wick)
+            shape = " + ".join(x for x, ok in (("no lower wick" if col == "bull" else "no upper wick", wick <= MAX_WICK), ("closes near high" if col == "bull" else "closes near low", opp <= MAX_WICK)) if ok)
+            rule = f"EMA {'20 above 50 above 100 above 200' if col == 'bull' else '20 below 50 below 100 below 200'}, body {abs(cl - o) / r * 100:.0f}%, wicks lower {lw:.0f}% / upper {uw:.0f}% ({shape}), {'touched' if dist == 0 else f'{dist:.2f}% from'} EMA5/9, volume {vx:.1f}x"
             prevd = d[d.index.strftime("%Y-%m-%d") < day]
             found.append(dict(t=t, key=key, dir=col, rule=rule, px=cl, body=abs(cl - o) / r * 100, vx=vx, start=st, prev=float(prevd.Close.iloc[-1]) if len(prevd) else None, bar=d.index[k]))
     if not found:
@@ -198,7 +200,7 @@ def scan15(H, data, now, state, dry):
             tot, grp = len(grp), grp[:TOP_N]
             end = (datetime.strptime(st, "%H:%M") + timedelta(minutes=15)).strftime("%H:%M")
             icon = "🟢" if d == "bull" else "🔴"
-            head = f"<b>{icon} 15-minute {'GREEN, EMAs rising' if d == 'bull' else 'RED, EMAs falling'}: pullback to EMA5/9, candle {st}-{end}</b>\nTrend-aligned candle with a tiny {'lower' if d == 'bull' else 'upper'} wick and 1.2x volume. Screen only.\n"
+            head = f"<b>{icon} 15-minute {'GREEN, EMAs rising' if d == 'bull' else 'RED, EMAs falling'}: pullback to EMA5/9, candle {st}-{end}</b>\nTrend-aligned candle that has no {'lower' if d == 'bull' else 'upper'} wick or closes near its {'high' if d == 'bull' else 'low'}, with 1.2x volume. Screen only.\n"
             lines = []
             for f in grp:
                 sym = f["t"].replace(".NS", "")

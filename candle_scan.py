@@ -177,7 +177,7 @@ def scan15(H, data, now, state, dry):
             key = f"C15|{t}|{day}|{st}|{col}"
             if key in state:
                 continue
-            rule = f"EMA {'50>100>200' if col == 'bull' else '50<100<200'}, {'lower' if col == 'bull' else 'upper'} wick {wick:.0f}%, {'touched' if dist == 0 else f'{dist:.2f}% from'} EMA5/9, volume {vx:.1f}x"
+            rule = f"EMA {'50 above 100 above 200' if col == 'bull' else '50 below 100 below 200'}, {'lower' if col == 'bull' else 'upper'} wick {wick:.0f}%, {'touched' if dist == 0 else f'{dist:.2f}% from'} EMA5/9, volume {vx:.1f}x"
             prevd = d[d.index.strftime("%Y-%m-%d") < day]
             found.append(dict(t=t, key=key, dir=col, rule=rule, px=cl, body=abs(cl - o) / r * 100, vx=vx, start=st, prev=float(prevd.Close.iloc[-1]) if len(prevd) else None, bar=d.index[k]))
     if not found:

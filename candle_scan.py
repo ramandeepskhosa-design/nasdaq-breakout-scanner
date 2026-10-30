@@ -8,8 +8,8 @@ PART 1 - 1-minute no-wick scan (python3 candle_scan.py minute), run by launchd a
   Sent about a minute after the candle closes (09:17, 09:32, 09:47, 10:02), strongest turnover first.
 
 PART 2 - 15-minute EMA-pullback candles (called from live_candle_alert.run_cycle at :01/:16/:31/:46), candles 09:15 to 15:00:
-    bull: EMA50>100>200, green candle, lower wick <= 5%, low touches/near EMA5 or EMA9, volume >= 1.5x normal
-    bear: EMA50<100<200, red candle, upper wick <= 5%, high touches/near EMA5 or EMA9, volume >= 1.5x normal
+    bull: EMA50>100>200, green candle, lower wick <= 7%, low touches/near EMA5 or EMA9, volume >= 1.2x normal
+    bear: EMA50<100<200, red candle, upper wick <= 7%, high touches/near EMA5 or EMA9, volume >= 1.2x normal
   First alert ~09:31 (the 09:15 candle), then every 15 minutes.
 """
 import sys
@@ -22,7 +22,7 @@ import yfinance as yf
 
 IST = "Asia/Kolkata"
 MIN_BODY_1M, MIN_MOVE_1M, WICK_TOL = 60.0, 0.20, 2.0     # 1-minute scan: body %, move %, "no wick" = wick <= 2% of the range
-VOL_MIN, MAX_WICK, NEAR_PCT = 1.5, 5.0, 0.15     # 15m scan: volume x normal, wick % of range, "near EMA" = within 0.15% of price
+VOL_MIN, MAX_WICK, NEAR_PCT = 1.2, 7.0, 0.15     # 15m scan: volume x normal, wick % of range, "near EMA" = within 0.15% of price
 FIRST_15M = "09:15"
 LAST_15M = "15:00"
 MIN_RANGE_15M = 0.20     # % - ignore tiny candles
@@ -129,8 +129,8 @@ def minute_scan(dry=False):
 
 def scan15(H, data, now, state, dry):
     """Part 2 (rewritten 30 Oct). 15-minute EMA-pullback candles, every 15 minutes from the 09:15 candle (alert ~09:31) to 15:00.
-    Bull: EMA50 > EMA100 > EMA200, GREEN candle, lower wick <= 5% of its range, low touched / within NEAR_PCT of EMA5 or EMA9, volume >= 1.5x normal.
-    Bear: EMA50 < EMA100 < EMA200, RED candle, upper wick <= 5%, high touched / within NEAR_PCT of EMA5 or EMA9, volume >= 1.5x normal.
+    Bull: EMA50 > EMA100 > EMA200, GREEN candle, lower wick <= 7% of its range, low touched / within NEAR_PCT of EMA5 or EMA9, volume >= 1.2x normal.
+    Bear: EMA50 < EMA100 < EMA200, RED candle, upper wick <= 7%, high touched / within NEAR_PCT of EMA5 or EMA9, volume >= 1.2x normal.
     `data` only supplies the ticker list; EMAs need ~30 days of 15m bars, so they are fetched here. Returns number of alerts sent."""
     nowi = now.astimezone(ZoneInfo(IST))
     long = H.fetch(sorted(data), period="30d")
@@ -194,7 +194,7 @@ def scan15(H, data, now, state, dry):
             tot, grp = len(grp), grp[:TOP_N]
             end = (datetime.strptime(st, "%H:%M") + timedelta(minutes=15)).strftime("%H:%M")
             icon = "🟢" if d == "bull" else "🔴"
-            head = f"<b>{icon} 15-minute {'GREEN, EMAs rising' if d == 'bull' else 'RED, EMAs falling'}: pullback to EMA5/9, candle {st}-{end}</b>\nTrend-aligned candle with a tiny {'lower' if d == 'bull' else 'upper'} wick and 1.5x volume. Screen only.\n"
+            head = f"<b>{icon} 15-minute {'GREEN, EMAs rising' if d == 'bull' else 'RED, EMAs falling'}: pullback to EMA5/9, candle {st}-{end}</b>\nTrend-aligned candle with a tiny {'lower' if d == 'bull' else 'upper'} wick and 1.2x volume. Screen only.\n"
             lines = []
             for f in grp:
                 sym = f["t"].replace(".NS", "")

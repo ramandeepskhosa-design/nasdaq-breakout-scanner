@@ -7,10 +7,10 @@ PART 1 - 1-minute no-wick scan (python3 candle_scan.py minute), run by launchd a
     plus body >= 60% of the candle range and move >= 0.2% (otherwise hundreds of stocks qualify on tiny candles).
   Sent about a minute after the candle closes (09:17, 09:32, 09:47, 10:02), strongest turnover first.
 
-PART 2 - 15-minute trend candles (called from live_candle_alert.run_cycle at :01/:16/:31/:46), candles from 10:30 on:
-    A) one candle with body >= 70% and volume >= 1.5x normal for that time, or
-    B) two candles in a row of the same colour, each with body >= 60%,
-  bull (green) and bear (red). First alert 10:46 (10:30 candle), last 15:16 (15:00 candle... 15:15 candle is thin, skipped).
+PART 2 - 15-minute EMA-pullback candles (called from live_candle_alert.run_cycle at :01/:16/:31/:46), candles 09:15 to 15:00:
+    bull: EMA50>100>200, green candle, lower wick <= 5%, low touches/near EMA5 or EMA9, volume >= 1.5x normal
+    bear: EMA50<100<200, red candle, upper wick <= 5%, high touches/near EMA5 or EMA9, volume >= 1.5x normal
+  First alert ~09:31 (the 09:15 candle), then every 15 minutes.
 """
 import sys
 import time
@@ -22,10 +22,10 @@ import yfinance as yf
 
 IST = "Asia/Kolkata"
 MIN_BODY_1M, MIN_MOVE_1M, WICK_TOL = 60.0, 0.20, 2.0     # 1-minute scan: body %, move %, "no wick" = wick <= 2% of the range
-BODY_A, VOL_A, BODY_B = 70.0, 1.5, 60.0
-FIRST_15M = "10:30"
+VOL_MIN, MAX_WICK, NEAR_PCT = 1.5, 5.0, 0.15     # 15m scan: volume x normal, wick % of range, "near EMA" = within 0.15% of price
+FIRST_15M = "09:15"
 LAST_15M = "15:00"
-MIN_RANGE_15M = 0.25     # % - ignore tiny candles
+MIN_RANGE_15M = 0.20     # % - ignore tiny candles
 TOP_N = 20
 MINUTE_STARTS = ("09:15", "09:30", "09:45", "10:00")
 
@@ -128,50 +128,58 @@ def minute_scan(dry=False):
 
 
 def scan15(H, data, now, state, dry):
-    """Part 2. data = {ticker: 15m df (2d)}. Returns number of alerts sent."""
+    """Part 2 (rewritten 30 Oct). 15-minute EMA-pullback candles, every 15 minutes from the 09:15 candle (alert ~09:31) to 15:00.
+    Bull: EMA50 > EMA100 > EMA200, GREEN candle, lower wick <= 5% of its range, low touched / within NEAR_PCT of EMA5 or EMA9, volume >= 1.5x normal.
+    Bear: EMA50 < EMA100 < EMA200, RED candle, upper wick <= 5%, high touched / within NEAR_PCT of EMA5 or EMA9, volume >= 1.5x normal.
+    `data` only supplies the ticker list; EMAs need ~30 days of 15m bars, so they are fetched here. Returns number of alerts sent."""
     nowi = now.astimezone(ZoneInfo(IST))
+    long = H.fetch(sorted(data), period="30d")
     found = []
-    for t, df in data.items():
+    for t, df in long.items():
         d = df.dropna(subset=["Open", "High", "Low", "Close"]).copy()
-        if d.empty:
+        if len(d) < 220:
             continue
         d.index = d.index.tz_convert(IST) if d.index.tz is not None else d.index.tz_localize("UTC").tz_convert(IST)
+        ema = {n: d.Close.ewm(span=n, adjust=False).mean() for n in (5, 9, 50, 100, 200)}
         day = d.index[-1].strftime("%Y-%m-%d")
-        g = d[d.index.strftime("%Y-%m-%d") == day]
-        hms = g.index.strftime("%H:%M")
-        for k in range(len(g)):
-            c = g.iloc[k]
-            st = hms[k]
+        for k in range(len(d)):
+            if d.index[k].strftime("%Y-%m-%d") != day:
+                continue
+            st = d.index[k].strftime("%H:%M")
             if st < FIRST_15M or st > LAST_15M:
                 continue
-            age = (nowi - (g.index[k] + timedelta(minutes=15))).total_seconds() / 60
+            age = (nowi - (d.index[k] + timedelta(minutes=15))).total_seconds() / 60
             if age < 0 or age > 35:
                 continue
+            c = d.iloc[k]
             o, h, l, cl = float(c.Open), float(c.High), float(c.Low), float(c.Close)
             r = h - l
-            if r <= 0 or (r / o) * 100 < MIN_RANGE_15M:
+            if r <= 0 or (r / o) * 100 < MIN_RANGE_15M or cl == o:
                 continue
-            body = abs(cl - o) / r * 100
-            col = "bull" if cl > o else "bear" if cl < o else None
-            if col is None:
+            e5, e9, e50, e100, e200 = (float(ema[n].iloc[k]) for n in (5, 9, 50, 100, 200))
+            if cl > o:
+                col = "bull"
+                if not (e50 > e100 > e200):
+                    continue
+                wick = (min(o, cl) - l) / r * 100
+                dist = min(abs(l - e5) / e5, abs(l - e9) / e9) * 100 if not (l <= e5 <= h or l <= e9 <= h) else 0.0
+            else:
+                col = "bear"
+                if not (e50 < e100 < e200):
+                    continue
+                wick = (h - max(o, cl)) / r * 100
+                dist = min(abs(h - e5) / e5, abs(h - e9) / e9) * 100 if not (l <= e5 <= h or l <= e9 <= h) else 0.0
+            if wick > MAX_WICK or dist > NEAR_PCT:
                 continue
-            rule = None
-            vx = None
-            if body >= BODY_A:
-                vx = H.slot_volume_ratio(df, g.index[k])
-                if vx is not None and vx >= VOL_A:
-                    rule = f"A: body {body:.0f}% with volume {vx:.1f}x normal"
-            if rule is None and body >= BODY_B and k >= 1:
-                p = g.iloc[k - 1]
-                pr = float(p.High) - float(p.Low)
-                if pr > 0 and abs(float(p.Close) - float(p.Open)) / pr * 100 >= BODY_B and (float(p.Close) > float(p.Open)) == (cl > o):
-                    rule = f"B: 2 {'green' if col == 'bull' else 'red'} candles in a row, bodies {abs(float(p.Close) - float(p.Open)) / pr * 100:.0f}% + {body:.0f}%"
-            if rule is None:
+            vx = H.slot_volume_ratio(d, d.index[k])
+            if vx is None or vx < VOL_MIN:
                 continue
             key = f"C15|{t}|{day}|{st}|{col}"
             if key in state:
                 continue
-            found.append(dict(t=t, key=key, dir=col, rule=rule, px=cl, body=body, vx=vx, start=st, prev=float(d[d.index.strftime("%Y-%m-%d") < day].Close.iloc[-1]) if (d.index.strftime("%Y-%m-%d") < day).any() else None, bar=g.index[k]))
+            rule = f"EMA {'50>100>200' if col == 'bull' else '50<100<200'}, {'lower' if col == 'bull' else 'upper'} wick {wick:.0f}%, {'touched' if dist == 0 else f'{dist:.2f}% from'} EMA5/9, volume {vx:.1f}x"
+            prevd = d[d.index.strftime("%Y-%m-%d") < day]
+            found.append(dict(t=t, key=key, dir=col, rule=rule, px=cl, body=abs(cl - o) / r * 100, vx=vx, start=st, prev=float(prevd.Close.iloc[-1]) if len(prevd) else None, bar=d.index[k]))
     if not found:
         return 0
     oi_ctx = H.oi_context(nowi)
@@ -182,11 +190,11 @@ def scan15(H, data, now, state, dry):
     sent = []
     try:
         for (st, d), grp in sorted(by.items()):
-            grp.sort(key=lambda x: (x["rule"][0] != "A", -(x["vx"] or 0), -x["body"]))
+            grp.sort(key=lambda x: -(x["vx"] or 0))
             tot, grp = len(grp), grp[:TOP_N]
             end = (datetime.strptime(st, "%H:%M") + timedelta(minutes=15)).strftime("%H:%M")
             icon = "🟢" if d == "bull" else "🔴"
-            head = f"<b>{icon} 15-minute {'GREEN' if d == 'bull' else 'RED'} trend candles {st}-{end}</b>\nA = 70% body + 1.5x volume, B = two same-colour candles with 60% bodies. Screen only.\n"
+            head = f"<b>{icon} 15-minute {'GREEN, EMAs rising' if d == 'bull' else 'RED, EMAs falling'}: pullback to EMA5/9, candle {st}-{end}</b>\nTrend-aligned candle with a tiny {'lower' if d == 'bull' else 'upper'} wick and 1.5x volume. Screen only.\n"
             lines = []
             for f in grp:
                 sym = f["t"].replace(".NS", "")

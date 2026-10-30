@@ -37,11 +37,11 @@ def _load(H, ticks):
 def minute_scan(dry=False):
     import live_candle_alert as H
     now = datetime.now(ZoneInfo(IST))
-    # launchd can start late (sleep/wake): pick the latest scan slot whose 1-minute candle closed within the last 6 minutes
+    # launchd can start late (sleep/wake): pick the latest scan slot whose 1-minute candle closed within the last 12 minutes
     want = None
     for st in MINUTE_STARTS:
         closes = datetime.strptime(now.strftime("%Y-%m-%d ") + st, "%Y-%m-%d %H:%M").replace(tzinfo=now.tzinfo) + timedelta(minutes=1)
-        if timedelta(0) <= now - closes <= timedelta(minutes=6):
+        if timedelta(0) <= now - closes <= timedelta(minutes=12):
             want = st
     if len(sys.argv) > 3:
         want = sys.argv[3]
@@ -52,37 +52,41 @@ def minute_scan(dry=False):
     if len(sys.argv) > 2 and sys.argv[2] != "now":
         day = sys.argv[2]
     ticks = list(H.load_markets()["NSE"]["tickers"])
-    # candle opened at `want`; Yahoo publishes it 20-60 s late and rate-limits bursts, so keep retrying the tickers still missing
-    import os
-    cache = os.path.join(os.path.dirname(os.path.abspath(__file__)), "learning", "yf_cache")
-    os.makedirs(cache, exist_ok=True)
-    try:
-        yf.set_tz_cache_location(cache)
-    except Exception:
-        pass
+    # candle opened at `want`; Yahoo publishes it 20-60 s late. Read Yahoo's chart API directly (yfinance's sqlite cache breaks under threads:
+    # "unable to open database file" silently dropped a third of the stocks), retrying the tickers still missing.
+    import requests
+    from concurrent.futures import ThreadPoolExecutor
+    rng = "1d" if day == now.strftime("%Y-%m-%d") else "5d"
+
+    def one(t):
+        for _ in range(2):
+            try:
+                r = requests.get(f"https://query1.finance.yahoo.com/v8/finance/chart/{t}", params={"interval": "1m", "range": rng},
+                                 headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
+                if r.status_code != 200:
+                    time.sleep(1.5)
+                    continue
+                j = r.json()["chart"]["result"][0]
+                q = j["indicators"]["quote"][0]
+                df = pd.DataFrame({"Open": q["open"], "High": q["high"], "Low": q["low"], "Close": q["close"], "Volume": q["volume"]},
+                                  index=pd.to_datetime(j["timestamp"], unit="s", utc=True).tz_convert(IST)).dropna(subset=["Open", "High", "Low", "Close"])
+                c = df[(df.index.strftime("%Y-%m-%d") == day) & (df.index.strftime("%H:%M") == want)]
+                return t, (c.iloc[0] if len(c) else None)
+            except Exception:
+                time.sleep(1)
+        return t, None
+
     rows = {}
     deadline = time.time() + 150
     while time.time() < deadline:
         missing = [t for t in ticks if t not in rows]
-        for i in range(0, len(missing), 40):
-            part = missing[i:i + 40]
-            try:
-                d = yf.download(part, period=("1d" if day == now.strftime("%Y-%m-%d") else "5d"), interval="1m", group_by="ticker", threads=True, progress=False, auto_adjust=False)
-            except Exception:
-                time.sleep(3)
-                continue
-            for t in part:
-                try:
-                    df = d[t].dropna(subset=["Open", "High", "Low", "Close"])
-                    df.index = df.index.tz_convert(IST)
-                    c = df[(df.index.strftime("%Y-%m-%d") == day) & (df.index.strftime("%H:%M") == want)]
-                    if len(c):
-                        rows[t] = (c.iloc[0], df)
-                except Exception:
-                    pass
-        if len(rows) >= 0.9 * len(ticks) or day != now.strftime("%Y-%m-%d"):
+        with ThreadPoolExecutor(12) as ex:
+            for t, c in ex.map(one, missing):
+                if c is not None:
+                    rows[t] = (c, None)
+        if len(rows) >= 0.93 * len(ticks) or day != now.strftime("%Y-%m-%d"):
             break
-        time.sleep(8)
+        time.sleep(6)
     out = []
     for t, (c, df) in rows.items():
         o, h, l, cl = float(c.Open), float(c.High), float(c.Low), float(c.Close)

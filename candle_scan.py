@@ -8,8 +8,8 @@ PART 1 - 1-minute no-wick scan (python3 candle_scan.py minute), run by launchd a
   Sent about a minute after the candle closes (09:17, 09:32, 09:47, 10:02), strongest turnover first.
 
 PART 2 - 15-minute EMA-pullback candles (called from live_candle_alert.run_cycle at :01/:16/:31/:46), candles 09:15 to 15:00:
-    bull: EMA50>100>200, green candle, lower wick <= 7%, low touches/near EMA5 or EMA9, volume >= 1.2x normal
-    bear: EMA50<100<200, red candle, upper wick <= 7%, high touches/near EMA5 or EMA9, volume >= 1.2x normal
+    bull: EMA20>50>100>200, green candle, lower wick <= 7%, low touches/near EMA5 or EMA9, volume >= 1.2x normal
+    bear: EMA20<50<100<200, red candle, upper wick <= 7%, high touches/near EMA5 or EMA9, volume >= 1.2x normal
   both: body >= 40% and the far-side wick <= 30%
   First alert ~09:31 (the 09:15 candle), then every 15 minutes.
 """
@@ -131,8 +131,8 @@ def minute_scan(dry=False):
 
 def scan15(H, data, now, state, dry):
     """Part 2 (rewritten 30 Oct). 15-minute EMA-pullback candles, every 15 minutes from the 09:15 candle (alert ~09:31) to 15:00.
-    Bull: EMA50 > EMA100 > EMA200, GREEN candle, lower wick <= 7% of its range, low touched / within NEAR_PCT of EMA5 or EMA9, volume >= 1.2x normal.
-    Bear: EMA50 < EMA100 < EMA200, RED candle, upper wick <= 7%, high touched / within NEAR_PCT of EMA5 or EMA9, volume >= 1.2x normal.
+    Bull: EMA20 > EMA50 > EMA100 > EMA200, GREEN candle, lower wick <= 7% of its range, low touched / within NEAR_PCT of EMA5 or EMA9, volume >= 1.2x normal.
+    Bear: EMA20 < EMA50 < EMA100 < EMA200, RED candle, upper wick <= 7%, high touched / within NEAR_PCT of EMA5 or EMA9, volume >= 1.2x normal.
     `data` only supplies the ticker list; EMAs need ~30 days of 15m bars, so they are fetched here. Returns number of alerts sent."""
     nowi = now.astimezone(ZoneInfo(IST))
     long = H.fetch(sorted(data), period="30d")
@@ -142,7 +142,7 @@ def scan15(H, data, now, state, dry):
         if len(d) < 220:
             continue
         d.index = d.index.tz_convert(IST) if d.index.tz is not None else d.index.tz_localize("UTC").tz_convert(IST)
-        ema = {n: d.Close.ewm(span=n, adjust=False).mean() for n in (5, 9, 50, 100, 200)}
+        ema = {n: d.Close.ewm(span=n, adjust=False).mean() for n in (5, 9, 20, 50, 100, 200)}
         day = d.index[-1].strftime("%Y-%m-%d")
         for k in range(len(d)):
             if d.index[k].strftime("%Y-%m-%d") != day:
@@ -158,17 +158,17 @@ def scan15(H, data, now, state, dry):
             r = h - l
             if r <= 0 or (r / o) * 100 < MIN_RANGE_15M or cl == o:
                 continue
-            e5, e9, e50, e100, e200 = (float(ema[n].iloc[k]) for n in (5, 9, 50, 100, 200))
+            e5, e9, e20, e50, e100, e200 = (float(ema[n].iloc[k]) for n in (5, 9, 20, 50, 100, 200))
             if cl > o:
                 col = "bull"
-                if not (e50 > e100 > e200):
+                if not (e20 > e50 > e100 > e200):
                     continue
                 wick = (min(o, cl) - l) / r * 100
                 opp = (h - max(o, cl)) / r * 100
                 dist = min(abs(l - e5) / e5, abs(l - e9) / e9) * 100 if not (l <= e5 <= h or l <= e9 <= h) else 0.0
             else:
                 col = "bear"
-                if not (e50 < e100 < e200):
+                if not (e20 < e50 < e100 < e200):
                     continue
                 wick = (h - max(o, cl)) / r * 100
                 opp = (min(o, cl) - l) / r * 100
@@ -181,7 +181,7 @@ def scan15(H, data, now, state, dry):
             key = f"C15|{t}|{day}|{st}|{col}"
             if key in state:
                 continue
-            rule = f"EMA {'50 above 100 above 200' if col == 'bull' else '50 below 100 below 200'}, body {abs(cl - o) / r * 100:.0f}%, {'lower' if col == 'bull' else 'upper'} wick {wick:.0f}%, {'touched' if dist == 0 else f'{dist:.2f}% from'} EMA5/9, volume {vx:.1f}x"
+            rule = f"EMA {'20 above 50 above 100 above 200' if col == 'bull' else '20 below 50 below 100 below 200'}, body {abs(cl - o) / r * 100:.0f}%, {'lower' if col == 'bull' else 'upper'} wick {wick:.0f}%, {'touched' if dist == 0 else f'{dist:.2f}% from'} EMA5/9, volume {vx:.1f}x"
             prevd = d[d.index.strftime("%Y-%m-%d") < day]
             found.append(dict(t=t, key=key, dir=col, rule=rule, px=cl, body=abs(cl - o) / r * 100, vx=vx, start=st, prev=float(prevd.Close.iloc[-1]) if len(prevd) else None, bar=d.index[k]))
     if not found:
